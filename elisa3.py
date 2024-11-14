@@ -31,9 +31,9 @@ def _find_devices():
     print('Looking for devices....')
 
     if os.name == 'nt':
-        import usb.backend.libusb0 as libusb0
+        import usb.backend.libusb1 as libusb1
 
-        backend = libusb0.get_backend()
+        backend = libusb1.get_backend()
     else:
         backend = libusb_package.get_libusb1_backend()
 
@@ -125,7 +125,9 @@ class Elisa3(threading.Thread):
         self.proxAmbientValue = [[0 for x in range(8)] for y in range(100)]
         self.groundValue = [[0 for x in range(4)] for y in range(100)]
         self.groundAmbientValue = [[0 for x in range(4)] for y in range(100)]
-        self.flagsTX = [[0 for x in range(2)] for y in range(100)]        
+        self.flagsTX = [[0 for x in range(2)] for y in range(100)]
+        self.gyroZ = [0] * 100
+        self.heading = [0] * 100
 
         devices = _find_devices()
         if not devices:
@@ -324,13 +326,14 @@ class Elisa3(threading.Thread):
                     self.groundAmbientValue[self.currPacketId*4+0][3] = (self.RX_buffer[10]<<8)|(self.RX_buffer[9])
                     self.accZ[self.currPacketId*4+0] = unpack("<h", pack("<BB", self.RX_buffer[11], self.RX_buffer[12]))[0]
                     self.batteryAdc[self.currPacketId*4+0] = (self.RX_buffer[14]<<8)|(self.RX_buffer[13])
-                    # self.RX_buffer[15] is free
+                    self.heading[self.currPacketId*4+0] = (self.RX_buffer[15])<<1;
                 elif(self.RX_buffer[0] == 7):
                     self.leftMotSteps[self.currPacketId*4+0] = unpack("<l", pack("<BBBB", self.RX_buffer[1], self.RX_buffer[2], self.RX_buffer[3], self.RX_buffer[4]))[0]
                     self.rightMotSteps[self.currPacketId*4+0] =  unpack("<l", pack("<BBBB", self.RX_buffer[5], self.RX_buffer[6], self.RX_buffer[7], self.RX_buffer[8]))[0]
                     self.robTheta[self.currPacketId*4+0] = (unpack("<h", pack("<BB", self.RX_buffer[9], self.RX_buffer[10]))[0])/10
                     self.robXPos[self.currPacketId*4+0] = unpack("<h", pack("<BB", self.RX_buffer[11], self.RX_buffer[12]))[0]
                     self.robYPos[self.currPacketId*4+0] = unpack("<h", pack("<BB", self.RX_buffer[13], self.RX_buffer[14]))[0]
+                    self.gyroZ[self.currPacketId*4+0] = unpack("<b", pack("<B", self.RX_buffer[15]))[0]<<6
 
             # Second robot
             if(self.RX_buffer[16] <= 2): # if something goes wrong skip the data
@@ -373,13 +376,14 @@ class Elisa3(threading.Thread):
                     self.groundAmbientValue[self.currPacketId*4+1][3] = (self.RX_buffer[26]<<8)|(self.RX_buffer[25])
                     self.accZ[self.currPacketId*4+1] = unpack("<h", pack("<BB", self.RX_buffer[27], self.RX_buffer[28]))[0]
                     self.batteryAdc[self.currPacketId*4+1] = (self.RX_buffer[30]<<8)|(self.RX_buffer[29])
-                    # self.RX_buffer[31] is free
+                    self.heading[self.currPacketId*4+1] = (self.RX_buffer[31])<<1;
                 elif(self.RX_buffer[16] == 7):
                     self.leftMotSteps[self.currPacketId*4+1] = unpack("<l", pack("<BBBB", self.RX_buffer[17], self.RX_buffer[18], self.RX_buffer[19], self.RX_buffer[20]))[0]
                     self.rightMotSteps[self.currPacketId*4+1] = unpack("<l", pack("<BBBB", self.RX_buffer[21], self.RX_buffer[22], self.RX_buffer[23], self.RX_buffer[24]))[0]
                     self.robTheta[self.currPacketId*4+1] = (unpack("<h", pack("<BB", self.RX_buffer[25], self.RX_buffer[26]))[0])/10
                     self.robXPos[self.currPacketId*4+1] = unpack("<h", pack("<BB", self.RX_buffer[27], self.RX_buffer[28]))[0]
                     self.robYPos[self.currPacketId*4+1] = unpack("<h", pack("<BB", self.RX_buffer[29], self.RX_buffer[30]))[0]
+                    self.gyroZ[self.currPacketId*4+0] = unpack("<b", pack("<B", self.RX_buffer[31]))[0]<<6
 
             # Third robot
             if(self.RX_buffer[32] <= 2): # if something goes wrong skip the data
@@ -422,13 +426,14 @@ class Elisa3(threading.Thread):
                     self.groundAmbientValue[self.currPacketId*4+2][3] = (self.RX_buffer[42]<<8)|(self.RX_buffer[41])
                     self.accZ[self.currPacketId*4+2] = unpack("<h", pack("<BB", self.RX_buffer[43], self.RX_buffer[44]))[0]
                     self.batteryAdc[self.currPacketId*4+2] = (self.RX_buffer[46]<<8)|(self.RX_buffer[45])
-                    # self.RX_buffer[47] is free
+                    self.heading[self.currPacketId*4+2] = (self.RX_buffer[47])<<1;
                 elif(self.RX_buffer[32] == 7):
                     self.leftMotSteps[self.currPacketId*4+2] = unpack("<l", pack("<BBBB", self.RX_buffer[33], self.RX_buffer[34], self.RX_buffer[35], self.RX_buffer[36]))[0]
                     self.rightMotSteps[self.currPacketId*4+2] = unpack("<l", pack("<BBBB", self.RX_buffer[37], self.RX_buffer[38], self.RX_buffer[39], self.RX_buffer[40]))[0]
                     self.robTheta[self.currPacketId*4+2] = (unpack("<h", pack("<BB", self.RX_buffer[41], self.RX_buffer[42]))[0])/10
                     self.robXPos[self.currPacketId*4+2] = unpack("<h", pack("<BB", self.RX_buffer[43], self.RX_buffer[44]))[0]
                     self.robYPos[self.currPacketId*4+2] = unpack("<h", pack("<BB", self.RX_buffer[45], self.RX_buffer[46]))[0]
+                    self.gyroZ[self.currPacketId*4+0] = unpack("<b", pack("<B", self.RX_buffer[47]))[0]<<6
 
             # Fourth robot
             if(self.RX_buffer[48] <= 2): # if something goes wrong skip the data
@@ -471,13 +476,14 @@ class Elisa3(threading.Thread):
                     self.groundAmbientValue[self.currPacketId*4+3][3] = (self.RX_buffer[58]<<8)|(self.RX_buffer[57])
                     self.accZ[self.currPacketId*4+3] = unpack("<h", pack("<BB", self.RX_buffer[59], self.RX_buffer[60]))[0]
                     self.batteryAdc[self.currPacketId*4+3] = (self.RX_buffer[62]<<8)|(self.RX_buffer[61])
-                    # self.RX_buffer[63] is free
+                    self.heading[self.currPacketId*4+3] = (self.RX_buffer[63])<<1;
                 elif(self.RX_buffer[48] == 7):
                     self.leftMotSteps[self.currPacketId*4+3] = unpack("<l", pack("<BBBB", self.RX_buffer[49], self.RX_buffer[50], self.RX_buffer[51], self.RX_buffer[52]))[0]
                     self.rightMotSteps[self.currPacketId*4+3] = unpack("<l", pack("<BBBB", self.RX_buffer[53], self.RX_buffer[54], self.RX_buffer[55], self.RX_buffer[56]))[0]
                     self.robTheta[self.currPacketId*4+3] = (unpack("<h", pack("<BB", self.RX_buffer[57], self.RX_buffer[58]))[0])/10
                     self.robXPos[self.currPacketId*4+3] = unpack("<h", pack("<BB", self.RX_buffer[59], self.RX_buffer[60]))[0]
                     self.robYPos[self.currPacketId*4+3] = unpack("<h", pack("<BB", self.RX_buffer[61], self.RX_buffer[62]))[0]
+                    self.gyroZ[self.currPacketId*4+0] = unpack("<b", pack("<B", self.RX_buffer[63]))[0]<<6
       
         except usb.USBError:
             traceback.print_exc(file=sys.stdout)
@@ -864,6 +870,36 @@ class Elisa3(threading.Thread):
         if(id >= 0):
            return self.rightMotSteps[id]
            
+    def getGyroZ(self, robotAddr):
+        """Request the raw value of the gyroscope z axis.
+
+        Parameters
+        ----------
+        robotAddr: the address of the robot from which receive data.
+
+        Returns
+        -------
+        Current z value, the range is between -8192 (-128 dps) and 8192 (128 dps), resolution = 1 dps.
+        """       
+        id = self.getIdFromAddress(robotAddr)
+        if(id >= 0):
+            return self.gyroZ[id]
+
+    def getHeading(self, robotAddr):
+        """Request the heading given by the magnetometer.
+
+        Parameters
+        ----------
+        robotAddr: the address of the robot from which receive data.
+
+        Returns
+        -------
+        Current heading, the range is between 0 and 360 degrees (0 = north).
+        """       
+        id = self.getIdFromAddress(robotAddr)
+        if(id >= 0):
+            return self.heading[id]
+
     def run(self):
         if not self.dev:
             print("Cannot find base station!")
