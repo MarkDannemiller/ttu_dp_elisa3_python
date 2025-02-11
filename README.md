@@ -6,3 +6,4 @@ Requirements:
 * pip3 install libusb_package
 * pip3 install pyusb
 
+For Windows users, download the libusb-1.0.dll from [https://libusb.info/](https://libusb.info/) (MinGW64) and put it inside C:\Windows\System32 directory.
