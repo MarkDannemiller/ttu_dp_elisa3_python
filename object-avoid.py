@@ -4,7 +4,7 @@ from elisa3 import Elisa3, _find_devices
 
 # Constants
 OBSTACLE_THR = 50
-NUM_ROBOTS = 8
+NUM_ROBOTS = 1
 
 # Update RGB values
 def update_rgb():

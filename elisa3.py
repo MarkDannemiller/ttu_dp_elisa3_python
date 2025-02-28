@@ -3,7 +3,7 @@
 
 import os
 import platform
-import libusb_package
+#import libusb_package
 import usb
 import usb.core
 import threading

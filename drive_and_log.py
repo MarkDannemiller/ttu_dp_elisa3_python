@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 drive_and_log.py
 
@@ -16,7 +15,7 @@ import elisa3  # Assumes that the elisa3.py file is in your PYTHONPATH or curren
 def main():
     # --- Setup and start communication with the robot ---
     # The robot address must match the one in your hardware configuration.
-    robotAddr = [3251]
+    robotAddr = [3298]
     robot = elisa3.Elisa3(robotAddr)
     robot.start()  # Start the communication thread
 
