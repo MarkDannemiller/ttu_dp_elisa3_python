@@ -6,7 +6,94 @@ This program attempts to recreate the simulation of a platoon of vehicles from t
 https://www.shu-xia-tang.net/_files/ugd/7a9a8e_041ebf9240a04af18b6df9b4a861b68e.pdf
 """
 
-def compute_control_input(
+# Global variables for debugging
+debug_u1 = []
+debug_u2 = []
+debug_info = []  # For storing additional debug info if needed
+
+#
+# 1. Vehicle Dynamics and Integration
+#
+
+# --- Vehicle Dynamics Functions ---
+def f_dyn(v, a, m, tau, Af, rho, Cd, Cr):
+    """
+    Compute the dynamics term f(v,a) for a vehicle:
+      ȧ = f_dyn(v,a) + g_dyn(v)*u.
+    """
+    return - (1.0 / tau) * (a + (Af * rho * Cd * v**2) / (2 * m) + Cr) - (Af * rho * Cd * v * a) / m
+
+def g_dyn(v, m, tau):
+    """
+    Compute g(v) for the vehicle dynamics:
+      ȧ = ... + g_dyn(v)*u.
+    """
+    return 1.0 / (m * tau)
+
+# --- RK4 Integration Step ---
+def rk4_step(f, t, X, dt):
+
+    
+    """
+    Perform one Runge–Kutta 4th-order integration step:
+      X_{n+1} = X_n + (dt/6)*(k1 + 2k2 + 2k3 + k4).
+    """
+    k1 = f(t, X)
+    k2 = f(t + dt/2, X + dt/2 * k1)
+    k3 = f(t + dt/2, X + dt/2 * k2)
+    k4 = f(t + dt, X + dt * k3)
+    return X + (dt/6) * (k1 + 2*k2 + 2*k3 + k4)
+
+
+#
+# 2. Smooth Leader Profile with Half-Cosine Segments
+#
+
+def half_cosine_transition(t, t0, t1, v0, v1):
+    """
+    Returns (speed, acceleration) for a half-cosine transition
+    from speed v0 at t=t0 to speed v1 at t=t1, with zero derivative
+    at both endpoints. If t < t0 => speed=v0, if t>t1 => speed=v1.
+    
+    speed(t)  = v0 + (v1 - v0)*[1 - cos(π·(t - t0)/(t1 - t0))]/2
+    accel(t)  = derivative of speed w.r.t. time.
+    
+    Both speed and accel are continuous. Derivative = 0 at t=t0 and t=t1.
+    """
+    if t <= t0:
+        return v0, 0.0
+    if t >= t1:
+        return v1, 0.0
+    
+    # normalized time in [0,1]
+    tau = (t - t0)/(t1 - t0)
+    # half-cosine shape
+    speed = v0 + (v1 - v0)*0.5*(1 - np.cos(np.pi * tau))
+    # derivative w.r.t t:
+    ds_dt = (v1 - v0)*0.5*(np.pi/(t1 - t0))*np.sin(np.pi * tau)
+    return speed, ds_dt
+
+
+def leader_profile(t):
+    """
+    For a small robot, we set a much lower speed profile than the paper.
+      0 ≤ t < 40 s: smooth acceleration from 0.1 m/s to 0.3 m/s
+      40 ≤ t < 80 s: smooth deceleration from 0.3 m/s to 0.15 m/s
+      t ≥ 80 s: smooth transition from 0.15 m/s to 0.2 m/s
+    """
+    if t < 40:
+        return half_cosine_transition(t, 0, 40, 0.1, 0.3)
+    elif t < 80:
+        return half_cosine_transition(t, 40, 80, 0.3, 0.15)
+    else:
+        return half_cosine_transition(t, 80, 120, 0.15, 0.2)
+
+
+#
+# 3. Controllers for Vehicles 1 and 2
+#
+
+def vehicle1_controller(
     h, k11, k12, m1, tau1, Af1, air_density, Cd1, v, a, Cr1, k13, epsilon11, epsilon12, epsilon13, delta0, a_leader
 ):
     """
@@ -96,154 +183,308 @@ def compute_control_input(
     u = np.clip(u, -delta0, delta0)
     return u
 
-def leader_profile(t):
+def vehicle2_controller(v2, a2, 
+                        z2_1, z2_2, z2_3,
+                        coupling_term, coupling_B,
+                        h, delta0,
+                        m, tau, Af, rho, Cd, Cr,
+                        k21, k211, k22, k23, epsilon22, epsilon23,
+                        saturate=True):
     """
-    Defines the speed and acceleration profile for the leader (human-driven) vehicle.
+    Compute the control input u2(t) for vehicle 2 using the backstepping design 
+    (as derived in equation (58) of the paper).
+
+    Parameters:
+      v2          : Current speed of vehicle 2 (m/s)
+      a2          : Current acceleration of vehicle 2 (m/s^2)
+      z2_1, z2_2, z2_3 : Error coordinates for vehicle 2 (scalar values)
+      coupling_term : The coupling term ∑_{j=1}^1 M_{2,j} A_j X_j from vehicle 1 (scalar)
+      coupling_B  : The coupling term ∑_{j=1}^1 M_{2,j} B_j from vehicle 1 (scalar)
+      h           : Desired time-gap (s)
+      delta0      : Limiting acceleration (m/s^2) for the human-driven vehicle
+      m, tau, Af, rho, Cd, Cr : Vehicle parameters for vehicle 2
+      k21         : Design parameter k_{2,1} (positive)
+      k211        : Design parameter k_{2,1,1} (positive)
+      k22         : Design parameter k_{2,2} (positive)
+      k23         : Design parameter k_{2,3} (positive)
+      epsilon22   : Tuning parameter ε_{2,2} (positive)
+      epsilon23   : Tuning parameter ε_{2,3} (positive)
+      saturate    : If True, saturate the control input to [-delta0, delta0]
+
+    Returns:
+      u2 (float) : The computed control input for vehicle 2.
+    """
+
+    # Dynamics of vehicle 2:
+    # f2(v2,a2) = -1/tau * ( a2 + (Af*rho*Cd*v2^2)/(2*m) + Cr ) - (Af*rho*Cd*v2*a2)/m
+    f2 = - (1.0/tau) * (a2 + (Af * rho * Cd * v2**2) / (2 * m) + Cr) - (Af * rho * Cd * v2 * a2) / m
+    # g2(v2) = 1/(m*tau)
+    g2 = 1.0 / (m * tau)
     
-    Piecewise linear profile:
-      - 0 <= t < 40 s: accelerate from 20.0 m/s to 21.0 m/s.
-      - 40 <= t < 80 s: decelerate from 21.0 m/s to 13.4 m/s.
-      - 80 <= t <= 120 s: constant speed at 20.8 m/s.
-    """
-    if t < 40:
-        v = 20.0 + (1.0 / 40) * t            # Linear increase from 20.0 to 21.0 m/s
-        a = 1.0 / 40                         # ~0.025 m/s² acceleration
-    elif t < 80:
-        v = 21.0 + ((13.4 - 21.0) / 40) * (t - 40)
-        a = (13.4 - 21.0) / 40               # ~ -0.19 m/s² deceleration
-    else:
-        v = 20.8
-        a = 0.0
-    return v, a
+    # Compute P2 using the coupling_B term:
+    P2 = k22 + (h * delta0) / (2 * epsilon22) * abs(coupling_B)
+    
+    # Compute Q2:
+    # Note: coupling_B - h*(k21+P2)*coupling_B = coupling_B*(1 - h*(k21+P2))
+    Q2 = k23 + abs(coupling_B * (1 - h*(k21 + P2))) * (delta0 / (2 * epsilon23))
+    
+    # Coefficients as per the derived controller:
+    coeff1 = (2 - k211) * k21 + P2
+    coeff2 = 2 - k211 - (k21 + P2) * P2
+    coeff3 = k21 + P2 + Q2
+
+    # Compute the composite control law:
+    # u2 = g2^{-1} * { -f2 - coeff1*z2_1 + coeff2*z2_2 - coeff3*z2_3 + coupling_term }
+    u2 = (1.0 / g2) * (-f2 - coeff1 * z2_1 + coeff2 * z2_2 - coeff3 * z2_3 + coupling_term)
+
+    # Optionally saturate the control input to the interval [-delta0, delta0]
+    if saturate:
+        u2 = np.clip(u2, -delta0, delta0)
+    
+    return u2
+
+
+#
+# 4. ODE Functions for Vehicles 1 and 2
+#
+
+# --- Define State Derivatives for Vehicle 1 ---
+def dX1_dt(t, X1, leader_acc, params):
+    # X1 = [x1, v1, a1]
+    x, v, a = X1
+    u1 = vehicle1_controller(params['h'], params['k11'], params['k12'],
+                             params['m'], params['tau'], params['Af'], params['air_density'],
+                             params['Cd'], v, a, params['Cr'], params['k13'],
+                             params['epsilon11'], params['epsilon12'], params['epsilon13'],
+                             params['delta0'], leader_acc)
+    dx = v
+    dv = a
+    da = f_dyn(v, a, params['m'], params['tau'], params['Af'], params['air_density'],
+               params['Cd'], params['Cr']) + g_dyn(v, params['m'], params['tau'])*u1
+    
+    # Update global debug variable for u1:
+    global debug_u1
+    debug_u1.append(u1)
+    return np.array([dx, dv, da])
+
+# --- Define State Derivatives for Vehicle 2 ---
+def dX2_dt(t, X2, X1, params, cp):
+    # X2 = [x2, v2, a2], X1 = [x1, v1, a1] from vehicle 1 at the same time
+    x2, v2, a2 = X2
+    x1, v1, a1 = X1
+    h = params['h']
+    # Compute vehicle 2 errors:
+    e_x2 = x1 - x2 - h*v2  # (L2 assumed zero)
+    e_v2 = v1 - v2
+    z2_1 = e_x2 - h*e_v2
+    z2_2 = e_v2 - (h*a1 - cp['k21'] * z2_1)
+    P2 = cp['k22'] + (h*params['delta0'])/(2*cp['epsilon22']) * abs(cp['coupling_B'])
+    z2_3 = a2 - ((1 - cp['k211'])*z2_1 + (cp['k21'] + P2)*z2_2 + cp['coupling_term'])
+    
+    u2 = vehicle2_controller(v2, a2, z2_1, z2_2, z2_3,
+                             cp['coupling_term'], cp['coupling_B'],
+                             h, params['delta0'], params['m'], params['tau'],
+                             params['Af'], params['air_density'], params['Cd'], params['Cr'],
+                             cp['k21'], cp['k211'], cp['k22'], cp['k23'], cp['epsilon22'], cp['epsilon23'])
+    dx = v2
+    dv = a2
+    da = f_dyn(v2, a2, params['m'], params['tau'], params['Af'], params['air_density'],
+               params['Cd'], params['Cr']) + g_dyn(v2, params['m'], params['tau'])*u2
+    
+    # Update global debug variable for u2:
+    global debug_u2
+    debug_u2.append(u2)
+    return np.array([dx, dv, da])
+
+
+
+#
+# 5. Main Simulation
+#
 
 def simulate_platoon(T=120, dt=0.01):
     """
     Simulates a platoon with one leader and two following automated vehicles.
     
     Vehicle 1 follows the leader and Vehicle 2 follows Vehicle 1.
-    At each time step, the controller computes the control input based on the relative acceleration.
     
     Returns:
       A tuple of time series arrays for time, speeds, gap errors, speed errors, and positions.
     """
     time = np.arange(0, T + dt, dt)
     N = len(time)
-    
-    # Vehicle parameters (assumed identical for both automated vehicles)
-    h = 0.8                # desired time gap (s)
-    k11 = 1.0              # design parameter k₁,₁
-    k12 = 0.5              # design parameter k₁,₂ (for q₁ computation)
-    m1 = 0.039             # mass (kg)
-    tau1 = 0.1             # response lag time (s)
-    Af1 = 0.0015           # frontal area (m²)
-    air_density = 1.225    # kg/m³
-    Cd1 = 0.3              # aerodynamic drag coefficient
-    Cr1 = 0.015            # rolling resistance coefficient
-    k13 = 0.5              # controller parameter k₁,₃
-    epsilon11 = 0.1        # tuning parameter ε₁,₁
-    epsilon12 = 0.1        # tuning parameter ε₁,₂ (for q₁ computation)
-    epsilon13 = 0.1        # tuning parameter ε₁,₃
-    delta0 = 2.0           # limiting acceleration (m/s²)
+
+    # Common vehicle parameters:
+    params = {
+        'm': 0.039,             # mass (kg)
+        'tau': 0.05,            # response lag time (s) (faster dynamics for small robot)
+        'Af': 0.0015,           # frontal area (m²)
+        'air_density': 1.225,   # kg/m³
+        'Cd': 0.3,              # aerodynamic drag coefficient
+        'Cr': 0.015,            # rolling resistance coefficient
+
+        'h': 0.8,               # desired time gap (s)
+        'k11': 1.0,           # design parameter k₁,₁
+        'k12': 1.0,          # design parameter k₁,₂ (for q₁ computation)
+        'k13': 1.0,            # controller parameter k₁,₃
+        'epsilon11': 1.0,      # tuning parameter ε₁,₁
+        'epsilon12': 1.0,      #  tuning parameter ε₁,₂ (for q₁ computation)
+        'epsilon13': 1.0,      # tuning parameter ε₁,₃
+        'delta0': 0.5           # limiting acceleration (m/s²)
+    }
+
+    # Vehicle 2 controller design parameters (coupling parameters)
+    cp = {
+        'k21': 1.0,       # k_{2,1}
+        'k211': 1.0,     # k_{2,1,1}
+        'k22': 1.0,      # k_{2,2}
+        'k23': 1.0,      # k_{2,3}
+        'epsilon22': 0.0005,
+        'epsilon23': 0.0005,
+        # These will be updated each time step using vehicle 1 errors:
+        'coupling_term': 0.0,
+        'coupling_B': 0.0
+    }
+
+    # Assume vehicle lengths are zero for simplicity.
     
     # Initialize arrays for states (position, speed, acceleration)
     leader_pos = np.zeros(N)
     leader_speed = np.zeros(N)
     leader_acc = np.zeros(N)
-    
-    x1 = np.zeros(N)
-    v1 = np.zeros(N)
-    a1 = np.zeros(N)
-    
-    x2 = np.zeros(N)
-    v2 = np.zeros(N)
-    a2 = np.zeros(N)
-    
+
+    X1 = np.zeros((N, 3))  # [x1, v1, a1]
+    X2 = np.zeros((N, 3))  # [x2, v2, a2]
+
     # Initial conditions:
-    leader_speed[0] = 20.0
-    leader_pos[0] = 0.0
-    v1[0] = 20.0
-    x1[0] = leader_pos[0] - h * leader_speed[0]
-    v2[0] = 20.0
-    x2[0] = x1[0] - h * v1[0]
+    leader_speed[0] = 0.1
+    leader_pos[0]   = 0.0
+    X1[0, :] = np.array([-params['h'] * leader_speed[0], leader_speed[0], 0.0])  # Vehicle 1 starts just behind the leader at leader_speed[0]
+    X2[0, :] = np.array([X1[0, 0] - params['h'] * leader_speed[0], leader_speed[0], 0.0])  # Vehicle 2 starts behind Vehicle 1 at leader_speed[0]
+
+
+    # Reset global debug lists:
+    global debug_u1, debug_u2
+    debug_u1 = []
+    debug_u2 = []
+
+    # For storing error coordinates for vehicle 1 (used in coupling)
+    z1_1_arr = np.zeros(N)
+    z1_2_arr = np.zeros(N)
+    z1_3_arr = np.zeros(N)
     
-    # Simulation loop using Euler integration
+    # Main simulation loop using RK4 integration
     for i in range(N - 1):
         t = time[i]
-        
-        # Leader update (human-driven vehicle)
+
+        # Leader update:
         v_leader, a_leader = leader_profile(t)
         leader_speed[i] = v_leader
         leader_acc[i] = a_leader
         if i > 0:
-            leader_pos[i] = leader_pos[i - 1] + leader_speed[i - 1] * dt
+            leader_pos[i] = leader_pos[i-1] + leader_speed[i-1]*dt
         
-        # Vehicle 1: control based on leader's acceleration
-        u1 = compute_control_input(
-            h, k11, k12, m1, tau1, Af1, air_density, Cd1,
-            v1[i], a1[i], Cr1, k13, epsilon11, epsilon12, epsilon13, delta0, a_leader
-        )
-        # Update Vehicle 1's state using Euler integration
-        a1[i + 1] = u1
-        v1[i + 1] = v1[i] + a1[i + 1] * dt
-        x1[i + 1] = x1[i] + v1[i] * dt
+        # --- Update Vehicle 1 using RK4 ---
+        # X1 = [x1, v1, a1]
+        X1[i+1, :] = rk4_step(lambda t_, X: dX1_dt(t_, X, a_leader, params), t, X1[i, :], dt)
         
-        # Vehicle 2: control based on Vehicle 1's acceleration
-        u2 = compute_control_input(
-            h, k11, k12, m1, tau1, Af1, air_density, Cd1,
-            v2[i], a2[i], Cr1, k13, epsilon11, epsilon12, epsilon13, delta0, a1[i]
-        )
-        a2[i + 1] = u2
-        v2[i + 1] = v2[i] + a2[i + 1] * dt
-        x2[i + 1] = x2[i] + v2[i] * dt
+        # --- Compute Coupling Terms from Vehicle 1 ---
+        # For vehicle 1, define errors:
+        # e_x1 = leader_pos - x1 - h*v1, e_v1 = leader_speed - v1
+        x1_val, v1_val, a1_val = X1[i, :]
+        e_x1 = leader_pos[i] - x1_val - params['h'] * v1_val
+        e_v1 = leader_speed[i] - v1_val
+        z1_1 = e_x1 - params['h'] * e_v1
+        p1 = params['k11'] + params['h']*params['delta0']/(2*params['epsilon11'])
+        q1 = params['k12'] + abs(1 - params['k11']*params['h'] - (params['h']**2 * params['delta0'])/(2*params['epsilon11'])) * (params['delta0']/(2*params['epsilon12']))
+        z1_2 = e_v1 + p1*z1_1
+        z1_3 = a1_val - (z1_1 + p1*e_v1 + q1*z1_2)
+        z1_1_arr[i] = z1_1
+        z1_2_arr[i] = z1_2
+        z1_3_arr[i] = z1_3
+        
+        # Coupling terms: K1 and B1 as defined in the paper
+        K1 = np.array([1 - p1**2, p1 + q1, 1.0])
+        coupling_term = np.dot(K1, np.array([z1_1, z1_2, z1_3]))
+        B1 = np.array([-params['h'], 1 - p1*params['h'], params['h'] + p1*q1 - p1])
+        coupling_B = np.linalg.norm(B1)
+        
+        cp['coupling_term'] = coupling_term
+        cp['coupling_B'] = coupling_B
+        
+        # --- Update Vehicle 2 using RK4 ---
+        # X2 depends on the current state of Vehicle 1 (for coupling)
+        X2[i+1, :] = rk4_step(lambda t_, X: dX2_dt(t_, X, X1[i, :], params, cp), t, X2[i, :], dt)
     
-    # Update final leader position
-    leader_pos[-1] = leader_pos[-2] + leader_speed[-2] * dt
-    
-    # Compute time-gap errors:
-    gap_error_1 = (leader_pos - x1) - h * leader_speed  # Leader minus Vehicle 1 gap error
-    gap_error_2 = (x1 - x2) - h * v1                        # Vehicle 1 minus Vehicle 2 gap error
-    
-    # Compute speed errors:
-    speed_error_1 = leader_speed - v1   # Leader and Vehicle 1 speed error
-    speed_error_2 = v1 - v2             # Vehicle 1 and Vehicle 2 speed error
-    
-    return (time, leader_speed, v1, v2,
-            gap_error_1, gap_error_2, speed_error_1, speed_error_2,
-            leader_pos, x1, x2)
+        # Debug: print every 50 steps (approximately every 0.5 sec if dt=0.01)
+        if i % 50 == 0:
+            print(f"[t={t:6.2f}] u1={debug_u1[-1]:7.3f}, u2={debug_u2[-1]:7.3f}, "
+                  f"v1={X1[i,1]:7.3f}, v2={X2[i,1]:7.3f}, "
+                  f"a1={X1[i,2]:7.3f}, a2={X2[i,2]:7.3f}, "
+                  f"lead_v={v_leader:7.3f}, lead_a={a_leader:7.3f}, "
+                  f"coupling={coupling_term:7.3f}")
 
+
+    # Final update for leader:
+    leader_pos[-1] = leader_pos[-2] + leader_speed[-2]*dt
+    leader_speed[-1], leader_acc[-1] = leader_profile(time[-1])
+    
+    # Extract state arrays for vehicle 1 and vehicle 2:
+    x1_arr = X1[:,0]
+    v1_arr = X1[:,1]
+    a1_arr = X1[:,2]
+    
+    x2_arr = X2[:,0]
+    v2_arr = X2[:,1]
+    a2_arr = X2[:,2]
+    
+    # Compute gap errors and speed errors:
+    gap_error_1 = (leader_pos - x1_arr) - params['h'] * leader_speed  # Leader - Vehicle 1 gap error
+    gap_error_2 = (x1_arr - x2_arr) - params['h'] * v1_arr               # Vehicle 1 - Vehicle 2 gap error
+    speed_error_1 = leader_speed - v1_arr
+    speed_error_2 = v1_arr - v2_arr
+    
+    return (time, leader_speed, v1_arr, v2_arr,
+            gap_error_1, gap_error_2, speed_error_1, speed_error_2,
+            leader_pos, x1_arr, x2_arr)
+
+
+#
+# 6. Plotting
+#
+
+# --- Run Simulation and Plot Results ---
 if __name__ == "__main__":
     # Run simulation for 120 seconds with a 0.01 s time step
-    (time, leader_speed, v1, v2, gap_err1, gap_err2, sp_err1, sp_err2, 
-     leader_pos, x1, x2) = simulate_platoon(T=120, dt=0.01)
+    time, leader_speed, v1, v2, gap1, gap2, sp1, sp2, lead_pos, x1, x2 = simulate_platoon()
     
-    # Plot speed profiles
-    plt.figure(figsize=(12, 10))
-    
-    plt.subplot(3, 1, 1)
-    plt.plot(time, leader_speed, label='Leader Speed', color='blue')
-    plt.plot(time, v1, label='Vehicle 1 Speed', color='orange')
-    plt.plot(time, v2, label='Vehicle 2 Speed', color='green')
-    plt.xlabel('Time (s)')
-    plt.ylabel('Speed (m/s)')
-    plt.title('Speed Profiles')
+    # Plot Speed Profiles
+    plt.figure(figsize=(12,10))
+    plt.subplot(3,1,1)
+    plt.plot(time, leader_speed, label="Veh0 (Leader)", color='blue')
+    plt.plot(time, v1, label="Veh1", color='orange')
+    plt.plot(time, v2, label="Veh2", color='green')
+    plt.xlabel("Time (s)")
+    plt.ylabel("Speed (m/s)")
+    plt.title("Speed Profiles (Smooth Leader)")
     plt.legend()
     
-    # Plot time gap errors
-    plt.subplot(3, 1, 2)
-    plt.plot(time, gap_err1, label='Gap Error: Leader - Vehicle 1', color='blue')
-    plt.plot(time, gap_err2, label='Gap Error: Vehicle 1 - Vehicle 2', color='red')
-    plt.xlabel('Time (s)')
-    plt.ylabel('Gap Error (m)')
-    plt.title('Time Gap Errors')
+    # Plot Gap Errors
+    plt.subplot(3,1,2)
+    plt.plot(time, gap1, label="Gap Error: Leader - Veh1", color='blue')
+    plt.plot(time, gap2, label="Gap Error: Veh1 - Veh2", color='red')
+    plt.xlabel("Time (s)")
+    plt.ylabel("Gap Error (m)")
+    plt.title("Time Gap Errors")
     plt.legend()
     
-    # Plot speed errors
-    plt.subplot(3, 1, 3)
-    plt.plot(time, sp_err1, label='Speed Error: Leader - Vehicle 1', color='blue')
-    plt.plot(time, sp_err2, label='Speed Error: Vehicle 1 - Vehicle 2', color='red')
-    plt.xlabel('Time (s)')
-    plt.ylabel('Speed Error (m/s)')
-    plt.title('Speed Errors')
+    # Plot Speed Errors
+    plt.subplot(3,1,3)
+    plt.plot(time, sp1, label="Speed Error: Leader - Veh1", color='blue')
+    plt.plot(time, sp2, label="Speed Error: Veh1 - Veh2", color='red')
+    plt.xlabel("Time (s)")
+    plt.ylabel("Speed Error (m/s)")
+    plt.title("Speed Errors")
     plt.legend()
     
     plt.tight_layout()
