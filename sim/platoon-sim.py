@@ -49,44 +49,57 @@ def rk4_step(f, t, X, dt):
 # 2. Smooth Leader Profile with Half-Cosine Segments
 #
 
-def half_cosine_transition(t, t0, t1, v0, v1):
-    """
-    Returns (speed, acceleration) for a half-cosine transition
-    from speed v0 at t=t0 to speed v1 at t=t1, with zero derivative
-    at both endpoints. If t < t0 => speed=v0, if t>t1 => speed=v1.
-    
-    speed(t)  = v0 + (v1 - v0)*[1 - cos(π·(t - t0)/(t1 - t0))]/2
-    accel(t)  = derivative of speed w.r.t. time.
-    
-    Both speed and accel are continuous. Derivative = 0 at t=t0 and t=t1.
-    """
-    if t <= t0:
-        return v0, 0.0
-    if t >= t1:
-        return v1, 0.0
-    
-    # normalized time in [0,1]
-    tau = (t - t0)/(t1 - t0)
-    # half-cosine shape
-    speed = v0 + (v1 - v0)*0.5*(1 - np.cos(np.pi * tau))
-    # derivative w.r.t t:
-    ds_dt = (v1 - v0)*0.5*(np.pi/(t1 - t0))*np.sin(np.pi * tau)
-    return speed, ds_dt
-
-
 def leader_profile(t):
     """
-    For a small robot, we set a much lower speed profile than the paper.
-      0 ≤ t < 40 s: smooth acceleration from 0.1 m/s to 0.3 m/s
-      40 ≤ t < 80 s: smooth deceleration from 0.3 m/s to 0.15 m/s
-      t ≥ 80 s: smooth transition from 0.15 m/s to 0.2 m/s
+    Leader speed profile based on the paper’s blue line, scaled down by 100.
+    
+    Segments (in seconds):
+      0 - 5:    Increase from 0.15 m/s to 0.21 m/s.
+      5 - 10:   Drop from 0.21 m/s to 0.14 m/s.
+      10 - 15:  Rise from 0.14 m/s to 0.20 m/s.
+      15 - 20:  Drop from 0.20 m/s to 0.13 m/s.
+      20 - 30:  Rise from 0.13 m/s to 0.21 m/s.
+      30 - 40:  Drop from 0.21 m/s to 0.13 m/s.
+      40 - 50:  Rise from 0.13 m/s to 0.21 m/s.
+      50 - 60:  Drop from 0.21 m/s to 0.13 m/s.
+      60 - 65:  Final rapid increase from 0.13 m/s to 0.20 m/s.
+      t ≥ 65:   Constant speed at 0.20 m/s.
     """
-    if t < 40:
-        return half_cosine_transition(t, 0, 40, 0.1, 0.3)
-    elif t < 80:
-        return half_cosine_transition(t, 40, 80, 0.3, 0.15)
+    # Helper function: half-cosine transition
+    def half_cosine_transition(t, t0, t1, v0, v1):
+        if t <= t0:
+            return v0, 0.0
+        if t >= t1:
+            return v1, 0.0
+        tau = (t - t0) / (t1 - t0)
+        speed = v0 + (v1 - v0) * 0.5 * (1 - np.cos(np.pi * tau))
+        # derivative:
+        accel = (v1 - v0) * 0.5 * (np.pi / (t1 - t0)) * np.sin(np.pi * tau)
+        return speed, accel
+
+    if t < 5:
+        return half_cosine_transition(t, 0, 5, 0.15, 0.21)
+    elif t < 10:
+        return half_cosine_transition(t, 5, 10, 0.21, 0.14)
+    elif t < 15:
+        return half_cosine_transition(t, 10, 15, 0.14, 0.20)
+    elif t < 20:
+        return half_cosine_transition(t, 15, 20, 0.20, 0.13)
+    elif t < 30:
+        return half_cosine_transition(t, 20, 30, 0.13, 0.21)
+    elif t < 40:
+        return half_cosine_transition(t, 30, 40, 0.21, 0.13)
+    elif t < 50:
+        return half_cosine_transition(t, 40, 50, 0.13, 0.21)
+    elif t < 60:
+        return half_cosine_transition(t, 50, 60, 0.21, 0.13)
+    elif t < 65:
+        return half_cosine_transition(t, 60, 65, 0.13, 0.20)
     else:
-        return half_cosine_transition(t, 80, 120, 0.15, 0.2)
+        return 0.20, 0.0
+
+def leader_profile_flat(t):
+    return 0.15, 0.0  # Constant speed of 0.15 m/s
 
 
 #
@@ -302,7 +315,7 @@ def dX2_dt(t, X2, X1, params, cp):
 # 5. Main Simulation
 #
 
-def simulate_platoon(T=120, dt=0.01):
+def simulate_platoon(T=300, dt=0.01):
     """
     Simulates a platoon with one leader and two following automated vehicles.
     
@@ -317,20 +330,20 @@ def simulate_platoon(T=120, dt=0.01):
     # Common vehicle parameters:
     params = {
         'm': 0.039,             # mass (kg)
-        'tau': 0.05,            # response lag time (s) (faster dynamics for small robot)
+        'tau': 0.5,             # response lag time (s) (faster dynamics for small robot)
         'Af': 0.0015,           # frontal area (m²)
         'air_density': 1.225,   # kg/m³
         'Cd': 0.3,              # aerodynamic drag coefficient
         'Cr': 0.015,            # rolling resistance coefficient
 
         'h': 0.8,               # desired time gap (s)
-        'k11': 1.0,           # design parameter k₁,₁
-        'k12': 1.0,          # design parameter k₁,₂ (for q₁ computation)
-        'k13': 1.0,            # controller parameter k₁,₃
-        'epsilon11': 1.0,      # tuning parameter ε₁,₁
-        'epsilon12': 1.0,      #  tuning parameter ε₁,₂ (for q₁ computation)
-        'epsilon13': 1.0,      # tuning parameter ε₁,₃
-        'delta0': 0.5           # limiting acceleration (m/s²)
+        'k11': -0.005,             # design parameter k₁,₁
+        'k12': -0.005,             # design parameter k₁,₂ (for q₁ computation)
+        'k13': -0.005,             # controller parameter k₁,₃
+        'epsilon11': 200.0,       # tuning parameter ε₁,₁
+        'epsilon12': 200.0,       #  tuning parameter ε₁,₂ (for q₁ computation)
+        'epsilon13': 200.0,       # tuning parameter ε₁,₃
+        'delta0': 2.0           # limiting acceleration (m/s²)
     }
 
     # Vehicle 2 controller design parameters (coupling parameters)
@@ -339,8 +352,8 @@ def simulate_platoon(T=120, dt=0.01):
         'k211': 1.0,     # k_{2,1,1}
         'k22': 1.0,      # k_{2,2}
         'k23': 1.0,      # k_{2,3}
-        'epsilon22': 0.0005,
-        'epsilon23': 0.0005,
+        'epsilon22': 100.0,
+        'epsilon23': 100.0,
         # These will be updated each time step using vehicle 1 errors:
         'coupling_term': 0.0,
         'coupling_B': 0.0
@@ -357,7 +370,7 @@ def simulate_platoon(T=120, dt=0.01):
     X2 = np.zeros((N, 3))  # [x2, v2, a2]
 
     # Initial conditions:
-    leader_speed[0] = 0.1
+    leader_speed[0] = 0.15
     leader_pos[0]   = 0.0
     X1[0, :] = np.array([-params['h'] * leader_speed[0], leader_speed[0], 0.0])  # Vehicle 1 starts just behind the leader at leader_speed[0]
     X2[0, :] = np.array([X1[0, 0] - params['h'] * leader_speed[0], leader_speed[0], 0.0])  # Vehicle 2 starts behind Vehicle 1 at leader_speed[0]
@@ -468,6 +481,7 @@ if __name__ == "__main__":
     plt.ylabel("Speed (m/s)")
     plt.title("Speed Profiles (Smooth Leader)")
     plt.legend()
+    # plt.ylim([-0.5, 0.5])
     
     # Plot Gap Errors
     plt.subplot(3,1,2)
@@ -477,6 +491,7 @@ if __name__ == "__main__":
     plt.ylabel("Gap Error (m)")
     plt.title("Time Gap Errors")
     plt.legend()
+    # plt.ylim([-10.0, 10.0])
     
     # Plot Speed Errors
     plt.subplot(3,1,3)
@@ -486,6 +501,7 @@ if __name__ == "__main__":
     plt.ylabel("Speed Error (m/s)")
     plt.title("Speed Errors")
     plt.legend()
+    # plt.ylim([-0.2, 0.2])
     
     plt.tight_layout()
     plt.show()
