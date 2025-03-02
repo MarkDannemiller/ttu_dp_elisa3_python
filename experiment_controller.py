@@ -1,6 +1,10 @@
 import time
 import numpy as np
 
+# For now, we will import the controller function from the simulation script.
+from sim.platoon_sim import vehicle1_controller_new
+from sim.platoon_sim import vehicle2_controller
+
 # Assume that vehicle1_controller_new is defined elsewhere.
 # It should have the signature:
 # vehicle1_controller_new(e_x, e_v, a, v, h, k11, k12, k13, m, tau, Af, air_density, Cd, Cr, delta0, epsilon11, epsilon12, epsilon13)
