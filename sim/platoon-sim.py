@@ -106,95 +106,75 @@ def leader_profile_flat(t):
 # 3. Controllers for Vehicles 1 and 2
 #
 
-def vehicle1_controller(
-    h, k11, k12, m1, tau1, Af1, air_density, Cd1, v, a, Cr1, k13, epsilon11, epsilon12, epsilon13, delta0, a_leader
-):
+import numpy as np
+
+def vehicle1_controller_new(e_x1, e_v1, a1, v1, h, k11, k12, k13, m1, tau1, Af1, air_density, Cd1, Cr1, delta0, epsilon11, epsilon12, epsilon13):
     """
-    Compute the control input u₁(t) for an automated vehicle using the control law.
-    
-    The tuning parameter q₁ is computed internally as:
-    
-        q₁ = k₁,₂ + |1 - k₁,₁·h - (h²·δ₀)/(2·ε₁,₁)| · (δ₀/(2·ε₁,₂))
-    
-    The control law (reformatted) is:
-    
-        u = m₁τ₁ * [ 
-              (1/τ₁) * ( a + (Af₁·ρ·Cd₁·v²)/(2m₁) + Cr₁ )
-            - (Af₁·ρ·Cd₁·v·a)/m₁
-            + (k₁,₁ + (h·δ₀)/(2ε₁,₁))·(a_leader - a - h·a)
-            - h·(a_leader - a)
-            + (2 + (k₁,₁ + (h·δ₀)/(2ε₁,₁))·q₁)·(a_leader - a)
-            - [ (k₁,₁ + (h·δ₀)/(2ε₁,₁)) + q₁ ]·a
-            - k₁,₃·( a - E )
-            - | h + (k₁,₁ + (h·δ₀)/(2ε₁,₁))·q₁ - (k₁,₁ + (h·δ₀)/(2ε₁,₁)) - q₁ |·(δ₀/(2ε₁,₃))·(a - E)
-        ]
-        
-    where the intermediate term E is defined as:
-    
-        E = (a_leader - a - h·a) - h·(a_leader - a) + (k₁,₁ + (h·δ₀)/(2ε₁,₁))
-    
-    The computed control input is then saturated to the range [-δ₀, δ₀].
-    
-    Parameters:
-        h (float): Desired time gap (s)
-        k11 (float): Design parameter k₁,₁
-        k12 (float): Design parameter k₁,₂ (used in q₁ computation)
-        m1 (float): Vehicle mass
-        tau1 (float): First order response lag time (s)
-        Af1 (float): Frontal area
-        air_density (float): Air density (kg/m³)
-        Cd1 (float): Aerodynamic drag coefficient
-        v (float): Vehicle speed (m/s)
-        a (float): Current vehicle acceleration (m/s²)
-        Cr1 (float): Rolling resistance coefficient
-        k13 (float): Controller parameter k₁,₃
-        epsilon11 (float): Tuning parameter ε₁,₁
-        epsilon12 (float): Tuning parameter ε₁,₂ (used in q₁ computation)
-        epsilon13 (float): Tuning parameter ε₁,₃
-        delta0 (float): Limiting acceleration δ₀ (max acceleration, m/s²)
-        a_leader (float): Acceleration of the preceding vehicle
-        
+    Controller for Vehicle 1 based on the backstepping design in the paper.
+
+    Inputs:
+      e_x1   : Position error, computed as (leader_pos - x1 - h*v1)
+      e_v1   : Speed error, computed as (leader_speed - v1)
+      a1     : Current acceleration of Vehicle 1
+      v1     : Current speed of Vehicle 1
+      h      : Desired time-gap (s)
+      k11    : Design parameter k_{1,1} (positive)
+      k12    : Design parameter k_{1,2} (positive)
+      k13    : Design parameter k_{1,3} (positive)
+      m1     : Mass of Vehicle 1
+      tau1   : Response lag time of Vehicle 1 (s)
+      Af1    : Frontal area of Vehicle 1 (m²)
+      air_density: Air density (kg/m³)
+      Cd1    : Aerodynamic drag coefficient
+      Cr1    : Rolling resistance coefficient
+      delta0 : Limiting acceleration (m/s²) for the leader (used in design)
+      epsilon11, epsilon12, epsilon13: Tuning parameters (positive)
+
     Returns:
-        float: The computed control input u₁.
+      u1: Control input for Vehicle 1.
+
+    This implementation follows the backstepping steps:
+      1. Compute z1_1 = e_x1 - h*e_v1  [Eq. (12)]
+      2. Set virtual speed control: bar_e_v1 = - (k11 + (h*delta0)/(2*epsilon11))*z1_1  [Eq. (19)]
+      3. Compute z1_2 = e_v1 - bar_e_v1, then set bar_a1 = z1_1 + p1*e_v1 + q1*z1_2, where
+         p1 = k11 + (h*delta0)/(2*epsilon11) and
+         q1 = k12 + |1 - k11*h - (h^2*delta0)/(2*epsilon11)|*(delta0/(2*epsilon12))  [Eqs. (27)-(29)]
+      4. Compute z1_3 = a1 - bar_a1
+      5. Finally, compute u1 = g1^{-1} [ -f_dyn(v1,a1) + p1*z1_1 + (2+p1*q1)*e_v1 - (p1+q1)*a1 - k13*z1_3 - |h+p1*q1-p1-q1|*(delta0/(2*epsilon13))*z1_3 ]  [Eq. (36)]
+      
+    Note: g1(v1) = 1/(m1*tau1) and f_dyn(v1,a1) is as defined in the dynamics.
     """
-    # Compute q₁ using the given formula (29):
-    q1 = k12 + abs(1 - k11 * h - (h**2 * delta0) / (2 * epsilon11)) * (delta0 / (2 * epsilon12))
+    # Stage 1: Compute error coordinate and virtual control for speed error
+    z1_1 = e_x1 - h * e_v1
+    p1 = k11 + (h * delta0) / (2.0 * epsilon11)
+    bar_e_v1 = - p1 * z1_1  # virtual speed control (Eq. 19)
     
-    # Term 1: feedforward, drag, and rolling resistance
-    term1 = (1 / tau1) * (a + (Af1 * air_density * Cd1 * v**2) / (2 * m1) + Cr1)
+    # Stage 2: Compute error in speed and virtual acceleration
+    z1_2 = e_v1 - bar_e_v1
+    q1 = k12 + abs(1 - k11 * h - (h**2 * delta0) / (2.0 * epsilon11)) * (delta0 / (2.0 * epsilon12))
+    bar_a1 = z1_1 + p1 * e_v1 + q1 * z1_2  # virtual acceleration (Eq. 27)
     
-    # Term 2: additional drag effect
-    term2 = - (Af1 * air_density * Cd1 * v * a) / m1
+    # Stage 3: Compute acceleration error and final control law
+    z1_3 = a1 - bar_a1
+
+    # Compute f_dyn and g_dyn for Vehicle 1 dynamics:
+    f_val = - (1.0 / tau1) * (a1 + (Af1 * air_density * Cd1 * v1**2) / (2.0 * m1) + Cr1) - (Af1 * air_density * Cd1 * v1 * a1) / m1
+    g_val = 1.0 / (m1 * tau1)
     
-    # Gain used in several terms
-    gain = k11 + (h * delta0) / (2 * epsilon11)
+    # Control law as per Eq. (36)
+    u1_unsat = (- f_val 
+                + p1 * z1_1 
+                + (2 + p1 * q1) * e_v1 
+                - (p1 + q1) * a1 
+                - k13 * z1_3 
+                - abs(h + p1 * q1 - p1 - q1) * (delta0 / (2.0 * epsilon13)) * z1_3)
     
-    # Term 3: error between leader and current acceleration (with time gap scaling)
-    term3 = gain * (a_leader - a - h * a)
-    
-    # Term 4: extra time gap correction
-    term4 = - h * (a_leader - a)
-    
-    # Term 5: further feedback based on acceleration difference weighted by q₁
-    term5 = (2 + gain * q1) * (a_leader - a)
-    
-    # Term 6: damping of current acceleration
-    term6 = - (gain + q1) * a
-    
-    # Intermediate term E used in further feedback
-    E = (a_leader - a - h * a) - h * (a_leader - a) + gain
-    
-    # Term 7: additional feedback using k₁,₃
-    term7 = - k13 * (a - E)
-    
-    # Term 8: nonlinear absolute value term
-    temp_abs = h + gain * q1 - gain - q1
-    term8 = - abs(temp_abs) * (delta0 / (2 * epsilon13)) * (a - E)
-    
-    u = m1 * tau1 * (term1 + term2 + term3 + term4 + term5 + term6 + term7 + term8)
-    # Saturate the control input to the range [-δ₀, δ₀]
-    u = np.clip(u, -delta0, delta0)
-    return u
+    u1 = (1.0 / g_val) * u1_unsat
+
+    # Saturate control input to [-delta0, delta0]
+    u1 = np.clip(u1, -delta0, delta0)
+    return u1
+
 
 def vehicle2_controller(v2, a2, 
                         z2_1, z2_2, z2_3,
@@ -262,23 +242,35 @@ def vehicle2_controller(v2, a2,
 #
 
 # --- Define State Derivatives for Vehicle 1 ---
-def dX1_dt(t, X1, leader_acc, params):
+def dX1_dt(t, X1, leader_state, params):
     # X1 = [x1, v1, a1]
+    # leader_state is a tuple: (leader_pos, leader_speed, leader_acc)
     x, v, a = X1
-    u1 = vehicle1_controller(params['h'], params['k11'], params['k12'],
-                             params['m'], params['tau'], params['Af'], params['air_density'],
-                             params['Cd'], v, a, params['Cr'], params['k13'],
-                             params['epsilon11'], params['epsilon12'], params['epsilon13'],
-                             params['delta0'], leader_acc)
+    leader_pos, leader_speed, leader_acc = leader_state
+
+    # Compute the position and speed errors for vehicle 1:
+    e_x1 = leader_pos - x - params['h'] * v
+    e_v1 = leader_speed - v
+
+    # Call the new controller function:
+    u1 = vehicle1_controller_new(e_x1, e_v1, a, v,
+                                 params['h'], params['k11'], params['k12'], params['k13'],
+                                 params['m'], params['tau'], params['Af'], params['air_density'],
+                                 params['Cd'], params['Cr'],
+                                 params['delta0'], params['epsilon11'], params['epsilon12'], params['epsilon13'])
+    
+    # Compute state derivatives:
     dx = v
     dv = a
-    da = f_dyn(v, a, params['m'], params['tau'], params['Af'], params['air_density'],
-               params['Cd'], params['Cr']) + g_dyn(v, params['m'], params['tau'])*u1
-    
-    # Update global debug variable for u1:
+    da = f_dyn(v, a, params['m'], params['tau'], params['Af'], params['air_density'], params['Cd'], params['Cr']) \
+         + g_dyn(v, params['m'], params['tau']) * u1
+
+    # Update debug information:
     global debug_u1
     debug_u1.append(u1)
+    
     return np.array([dx, dv, da])
+
 
 # --- Define State Derivatives for Vehicle 2 ---
 def dX2_dt(t, X2, X1, params, cp):
@@ -315,7 +307,7 @@ def dX2_dt(t, X2, X1, params, cp):
 # 5. Main Simulation
 #
 
-def simulate_platoon(T=300, dt=0.01):
+def simulate_platoon(T=120, dt=0.01):
     """
     Simulates a platoon with one leader and two following automated vehicles.
     
@@ -337,12 +329,12 @@ def simulate_platoon(T=300, dt=0.01):
         'Cr': 0.015,            # rolling resistance coefficient
 
         'h': 0.8,               # desired time gap (s)
-        'k11': -0.005,             # design parameter k₁,₁
-        'k12': -0.005,             # design parameter k₁,₂ (for q₁ computation)
-        'k13': -0.005,             # controller parameter k₁,₃
-        'epsilon11': 200.0,       # tuning parameter ε₁,₁
-        'epsilon12': 200.0,       #  tuning parameter ε₁,₂ (for q₁ computation)
-        'epsilon13': 200.0,       # tuning parameter ε₁,₃
+        'k11': 10.0,             # design parameter k₁,₁
+        'k12': 10.0,             # design parameter k₁,₂ (for q₁ computation)
+        'k13': 10.0,             # controller parameter k₁,₃
+        'epsilon11': 1.0,       # tuning parameter ε₁,₁
+        'epsilon12': 1.0,       # tuning parameter ε₁,₂ (for q₁ computation)
+        'epsilon13': 1.0,       # tuning parameter ε₁,₃
         'delta0': 2.0           # limiting acceleration (m/s²)
     }
 
@@ -398,8 +390,9 @@ def simulate_platoon(T=300, dt=0.01):
             leader_pos[i] = leader_pos[i-1] + leader_speed[i-1]*dt
         
         # --- Update Vehicle 1 using RK4 ---
-        # X1 = [x1, v1, a1]
-        X1[i+1, :] = rk4_step(lambda t_, X: dX1_dt(t_, X, a_leader, params), t, X1[i, :], dt)
+        leader_state = (leader_pos[i], leader_speed[i], leader_acc[i])
+        X1[i+1, :] = rk4_step(lambda t_, X: dX1_dt(t_, X, leader_state, params), t, X1[i, :], dt)
+
         
         # --- Compute Coupling Terms from Vehicle 1 ---
         # For vehicle 1, define errors:
@@ -471,9 +464,8 @@ if __name__ == "__main__":
     # Run simulation for 120 seconds with a 0.01 s time step
     time, leader_speed, v1, v2, gap1, gap2, sp1, sp2, lead_pos, x1, x2 = simulate_platoon()
     
-    # Plot Speed Profiles
-    plt.figure(figsize=(12,10))
-    plt.subplot(3,1,1)
+    # --- Save Speed Profiles Figure ---
+    fig1 = plt.figure(figsize=(12,6))
     plt.plot(time, leader_speed, label="Veh0 (Leader)", color='blue')
     plt.plot(time, v1, label="Veh1", color='orange')
     plt.plot(time, v2, label="Veh2", color='green')
@@ -481,27 +473,34 @@ if __name__ == "__main__":
     plt.ylabel("Speed (m/s)")
     plt.title("Speed Profiles (Smooth Leader)")
     plt.legend()
-    # plt.ylim([-0.5, 0.5])
+    plt.tight_layout()
+    fig1.savefig("speed_profiles.png")
+    plt.close(fig1)
     
-    # Plot Gap Errors
-    plt.subplot(3,1,2)
+    # --- Save Gap Errors Figure ---
+    fig2 = plt.figure(figsize=(12,6))
     plt.plot(time, gap1, label="Gap Error: Leader - Veh1", color='blue')
     plt.plot(time, gap2, label="Gap Error: Veh1 - Veh2", color='red')
     plt.xlabel("Time (s)")
     plt.ylabel("Gap Error (m)")
     plt.title("Time Gap Errors")
     plt.legend()
-    # plt.ylim([-10.0, 10.0])
+    plt.tight_layout()
+    fig2.savefig("gap_errors.png")
+    plt.close(fig2)
     
-    # Plot Speed Errors
-    plt.subplot(3,1,3)
+    # --- Save Speed Errors Figure ---
+    fig3 = plt.figure(figsize=(12,6))
     plt.plot(time, sp1, label="Speed Error: Leader - Veh1", color='blue')
     plt.plot(time, sp2, label="Speed Error: Veh1 - Veh2", color='red')
     plt.xlabel("Time (s)")
     plt.ylabel("Speed Error (m/s)")
     plt.title("Speed Errors")
     plt.legend()
-    # plt.ylim([-0.2, 0.2])
-    
     plt.tight_layout()
-    plt.show()
+    fig3.savefig("speed_errors.png")
+    plt.close(fig3)
+    
+    # Optionally, display the figures if desired:
+    # To display, comment out the plt.close(figX) lines above and then execute:
+    # plt.show()
