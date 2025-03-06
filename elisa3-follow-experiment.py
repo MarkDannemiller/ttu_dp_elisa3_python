@@ -23,7 +23,7 @@ def get_sensor_data(robot, robot_addr, prev_position, dt):
       - getAccX: as the forward acceleration.
     """
     # Get current position (x-axis) from odometry
-    pos = robot.getOdomXpos(robot_addr)
+    pos = robot.getOdomXpos(robot_addr) * 0.001  # convert to meters
     # Compute speed as finite difference (if previous position is available)
     if prev_position is None:
         speed = 0.0
@@ -135,15 +135,19 @@ def main():
     prev_leader_state_pos = None  # for preceding state in follower
 
     start_time = time.time()
-    while (time.time() - start_time) < params["experiment_duration"]:
+    prev_time = start_time
+    experiment_duration = params["experiment_duration"]
+    while (time.time() - start_time) < experiment_duration:
         current_time = time.time() - start_time
+        dt_actual = time.time() - prev_time
+        prev_time = time.time()
 
         # --- Leader Control ---
         # Get leader sensor data (using wrapper function)
         leader_sensor, new_leader_pos = get_sensor_data(robot_interface, leader_addr, prev_leader_pos, dt)
         prev_leader_pos = new_leader_pos
         # Compute control command for leader
-        leader_command = leader_controller.compute_command(leader_sensor, current_time)
+        leader_command = leader_controller.compute_command(leader_sensor, current_time, dt_actual)
         # ************** For simplicity, we assume the control command is a motor speed command.
         # Convert command to left/right speeds (for a differential drive, you might use the same command for both wheels).
         leader_speed = int(np.clip(leader_command, -128, 127))
@@ -163,7 +167,7 @@ def main():
         prev_leader_state_pos = new_preceding_pos
 
         # Compute control command for follower
-        follower_command = follower_controller.compute_command(follower_sensor, current_time, preceding_state)
+        follower_command = follower_controller.compute_command(follower_sensor, current_time, preceding_state, dt_actual)
         follower_speed = int(np.clip(follower_command, -128, 127))
         # Pass follower command and proximity data to the orientation control function
         prox = robot_interface.getAllProximity(follower_addr)
@@ -175,7 +179,11 @@ def main():
         # Optional: Print debug information
         print(f"[{current_time:5.2f}s] Leader command: {leader_command:.3f} | Follower command: {follower_command:.3f}")
 
-        time.sleep(dt)
+        # Enforce constant dt:
+        loop_elapsed = time.time() - prev_time
+        sleep_time = follower_controller.nominal_dt - loop_elapsed
+        if sleep_time > 0:
+            time.sleep(sleep_time)
 
     # End of experiment: stop all robots
     robot_interface.setLeftSpeed(leader_addr, 0)

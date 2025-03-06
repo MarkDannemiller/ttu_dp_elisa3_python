@@ -37,12 +37,18 @@ class ExperimentController:
         self.role = role.lower()
         self.params = params
         self.control_params = control_params
-        self.dt = dt
+        self.nominal_dt = dt
         
-        # For leader control, set up a simple PID controller state.
-        if self.role == 'leader':
-            self.integral_error = 0.0
-            self.previous_error = 0.0
+        # PID state for both leader and follower:
+        self.integral_error = 0.0
+        self.previous_error = 0.0
+
+        if self.role == "follower":
+            # Initialize the internal desired speed to the starting speed.
+            self.desired_speed = params.get("initial_speed", 0.15)
+            # Set up a simple PID state for speed control.
+            self.pid_integral = 0.0
+            self.pid_prev_error = 0.0
 
     def leader_profile(self, t):
         """
@@ -81,13 +87,14 @@ class ExperimentController:
         else:
             return 0.20, 0.0
 
-    def compute_leader_command(self, sensor_data, t):
+    def compute_leader_command(self, sensor_data, t, dt_actual):
         """
         Computes the control command for a leader robot.
         
         Inputs:
           sensor_data: Dictionary with keys 'position', 'speed', 'acceleration'
           t          : Current time (s)
+          dt_actual  : The actual elapsed time since the last control cycle.
           
         Returns:
           command    : Control output (e.g., voltage, PWM, etc.) for speed tracking.
@@ -98,8 +105,8 @@ class ExperimentController:
         
         # Compute error for PID
         error = desired_speed - current_speed
-        self.integral_error += error * self.dt
-        derivative_error = (error - self.previous_error) / self.dt
+        self.integral_error += error * dt_actual
+        derivative_error = (error - self.previous_error) / dt_actual if dt_actual > 0 else 0.0
         self.previous_error = error
         
         kp = self.control_params.get("leader_kp", 1.0)
@@ -110,25 +117,28 @@ class ExperimentController:
         command = kp * error + ki * self.integral_error + kd * derivative_error
         return command
 
-    def compute_follower_command(self, sensor_data, preceding_state):
+    def compute_follower_command(self, sensor_data, preceding_state, dt_actual):
         """
-        Computes the control command for a follower robot.
+        For the follower, we first use the high-level backstepping controller 
+        to obtain an acceleration command (in m/s²). Then we integrate this 
+        to update a desired speed. Finally, a low-level PID speed controller 
+        converts the speed error (between the desired speed and measured speed) 
+        into a motor command.
         
-        Inputs:
-          sensor_data    : Dictionary with keys 'position', 'speed', 'acceleration'
-          preceding_state: Dictionary with keys 'position', 'speed', 'acceleration' for the robot ahead.
-          
-        Returns:
-          command        : Control output computed via the backstepping controller.
+        sensor_data: Dictionary with keys 'position', 'speed', 'acceleration'
+        preceding_state: Dictionary for the preceding robot with same keys.
         """
         h = self.params["h"]
-        # Calculate gap error and speed error.
+        # Compute gap error and speed error:
         e_x = preceding_state["position"] - sensor_data["position"] - h * sensor_data["speed"]
         e_v = preceding_state["speed"] - sensor_data["speed"]
-        
-        # Call the backstepping controller function.
-        command = vehicle1_controller_new(
-            e_x, e_v, sensor_data["acceleration"], sensor_data["speed"],
+
+        # Here we assume vehicle1_controller_new (the high-level backstepping controller)
+        # returns an acceleration command based on the error.
+        a_command = vehicle1_controller_new(
+            e_x, e_v,
+            sensor_data["acceleration"],
+            sensor_data["speed"],
             h,
             self.control_params["k11"],
             self.control_params["k12"],
@@ -144,11 +154,29 @@ class ExperimentController:
             self.control_params["epsilon12"],
             self.control_params["epsilon13"]
         )
-        # Saturate the command as a safety measure.
-        command = np.clip(command, -self.control_params["delta0"], self.control_params["delta0"])
-        return command
+        # Integrate the acceleration command to update desired speed:
+        self.desired_speed += a_command * dt_actual
+        # Optionally, clamp the desired speed to a valid range:
+        v_min, v_max = 0.0, 0.3  # for instance, for a palm-sized robot
+        self.desired_speed = max(v_min, min(v_max, self.desired_speed))
+        
+        # Now run a low-level PID speed controller:
+        error = self.desired_speed - sensor_data["speed"]
+        self.pid_integral += error * dt_actual
+        derivative = (error - self.pid_prev_error) / dt_actual if dt_actual > 0 else 0.0
+        self.pid_prev_error = error
+        
+        # Use follower-specific PID gains:
+        kp = self.control_params.get("follower_kp", 1.0)
+        ki = self.control_params.get("follower_ki", 0.1)
+        kd = self.control_params.get("follower_kd", 0.05)
+        motor_command = kp * error + ki * self.pid_integral + kd * derivative
+        
+        # Saturate motor command to hardware limits (max inputs of robot motors)
+        motor_command = np.clip(motor_command, -128, 127)
+        return motor_command
 
-    def compute_command(self, sensor_data, t, preceding_state=None):
+    def compute_command(self, sensor_data, t, preceding_state=None, dt_actual=None):
         """
         Computes the control command based on the role.
         
@@ -160,6 +188,8 @@ class ExperimentController:
         Returns:
           command        : The computed control output.
         """
+        if dt_actual is None:
+            dt_actual = self.nominal_dt  # fallback to nominal dt
         if self.role == "leader":
             return self.compute_leader_command(sensor_data, t)
         elif self.role == "follower":
