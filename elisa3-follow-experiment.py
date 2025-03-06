@@ -48,6 +48,44 @@ def get_preceding_state(robot, preceding_addr, dt, prev_preceding_pos):
     acc = robot.getAccX(preceding_addr)
     return {"position": pos, "speed": speed, "acceleration": acc}, pos
 
+def orientation_control(prox, forward_speed):
+    """
+    Applies a differential turn offset based on side proximity sensors,
+    but does NOT override the forward_speed from the platoon/leader code.
+
+    prox[1] = right side sensor
+    prox[7] = left side sensor
+    prox[0] = front sensor (optional)
+
+    forward_speed: the speed computed by the platoon controller
+                   (or the leader speed profile).
+    """
+    # If you still want *some* front sensor logic, keep it minimal:
+    front_val = prox[0]
+    if front_val > 300:
+        # E.g., reduce forward speed a bit but don't zero it out
+        forward_speed *= 0.5  # or remove entirely if undesired
+
+    left_val = prox[7]
+    right_val = prox[1]
+
+    turn_gain = 0.3
+    turn_offset = turn_gain * (right_val - left_val)
+
+    # Limit the turn offset so it doesn't dominate the forward speed.
+    max_offset = 0.5 * forward_speed
+    turn_offset = max(-max_offset, min(turn_offset, max_offset))
+
+    left_speed = forward_speed - turn_offset
+    right_speed = forward_speed + turn_offset
+
+    # Clamp speeds to [0..100] or whatever is valid for your motors
+    left_speed = max(0, min(127, left_speed))
+    right_speed = max(0, min(127, right_speed))
+
+    return int(left_speed), int(right_speed)
+
+
 # --- Main Experiment Script ---
 def main():
     # Define physical parameters and control parameters
@@ -106,10 +144,12 @@ def main():
         prev_leader_pos = new_leader_pos
         # Compute control command for leader
         leader_command = leader_controller.compute_command(leader_sensor, current_time)
-        # For simplicity, we assume the control command is a motor speed command.
+        # ************** For simplicity, we assume the control command is a motor speed command.
         # Convert command to left/right speeds (for a differential drive, you might use the same command for both wheels).
-        leader_left_speed = int(np.clip(leader_command, -128, 127))
-        leader_right_speed = leader_left_speed
+        leader_speed = int(np.clip(leader_command, -128, 127))
+        # Pass leader command and proximity data to the orientation control function
+        prox = robot_interface.getAllProximity(leader_addr)
+        leader_left_speed, leader_right_speed = orientation_control(prox, leader_speed)
         # Send speed commands to the leader robot
         robot_interface.setLeftSpeed(leader_addr, leader_left_speed)
         robot_interface.setRightSpeed(leader_addr, leader_right_speed)
@@ -121,10 +161,13 @@ def main():
         # Get preceding (leader) state for the follower
         preceding_state, new_preceding_pos = get_preceding_state(robot_interface, leader_addr, dt, prev_leader_state_pos)
         prev_leader_state_pos = new_preceding_pos
+
         # Compute control command for follower
         follower_command = follower_controller.compute_command(follower_sensor, current_time, preceding_state)
-        follower_left_speed = int(np.clip(follower_command, -128, 127))
-        follower_right_speed = follower_left_speed
+        follower_speed = int(np.clip(follower_command, -128, 127))
+        # Pass follower command and proximity data to the orientation control function
+        prox = robot_interface.getAllProximity(follower_addr)
+        follower_left_speed, follower_right_speed = orientation_control(prox, follower_speed)
         # Send speed commands to the follower robot
         robot_interface.setLeftSpeed(follower_addr, follower_left_speed)
         robot_interface.setRightSpeed(follower_addr, follower_right_speed)
