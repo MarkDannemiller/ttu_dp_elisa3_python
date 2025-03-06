@@ -191,11 +191,11 @@ class ExperimentController:
         if dt_actual is None:
             dt_actual = self.nominal_dt  # fallback to nominal dt
         if self.role == "leader":
-            return self.compute_leader_command(sensor_data, t)
+            return self.compute_leader_command(sensor_data, t, dt_actual)
         elif self.role == "follower":
             if preceding_state is None:
                 raise ValueError("Follower mode requires preceding_state input.")
-            return self.compute_follower_command(sensor_data, preceding_state)
+            return self.compute_follower_command(sensor_data, preceding_state, dt_actual)
         else:
             raise ValueError("Invalid role specified.")
 

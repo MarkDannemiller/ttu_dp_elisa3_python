@@ -119,17 +119,16 @@ def main():
     # and robot with address 0x1002 is the follower.
     leader_addr = 3827
     follower_addr = 4687
-    elisa_control = Elisa3(3827)
-    elisa_control.setRed(elisa_control.robotAddress[0], 255)
     # elisa_control.setGreen(elisa_control.robotAddress[1], 255)
     # Instantiate the Elisa3 interface.
     # For simplicity, we assume the Elisa3 class handles multiple robots.
     robot_interface = Elisa3([leader_addr, follower_addr])
-
+    robot_interface.start()
     # Create ExperimentController instances.
     # For the leader, we use role "leader"; for the follower, "follower".
     leader_controller = ExperimentController(role="leader", params=params, control_params=control_params, dt=dt)
     follower_controller = ExperimentController(role="follower", params=params, control_params=control_params, dt=dt)
+    robot_interface.setRed(leader_addr, 255)
 
     # Variables to store previous positions for finite-difference speed estimation
     prev_leader_pos = None
