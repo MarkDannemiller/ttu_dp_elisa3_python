@@ -23,19 +23,29 @@ def get_sensor_data(robot, robot_addr, prev_position, dt):
       - getAccX: as the forward acceleration.
     """
     # Get current position (x-axis) from odometry
-    pos = robot.getOdomXpos(robot_addr) * 0.001  # convert to meters
-    # Compute speed as finite difference (if previous position is available)
-    if prev_position is None:
-        speed = 0.0
-    else:
-        speed = (pos - prev_position) / dt
+    # pos = robot.getOdomXpos(robot_addr) * 0.001  # convert to meters
+    # # Compute speed as finite difference (if previous position is available)
+    # if prev_position is None:
+    #     speed = 0.0
+    # else:
+    #     speed = (pos - prev_position) / dt
     # Get acceleration from the accelerometer (assume getAccX returns acceleration in m/s^2)
     acc = robot.getAccX(robot_addr)
+    if prev_position is None:
+        # Initialize with zero starting speed and position
+        speed = acc * dt
+        pos = 0.5 * acc * (dt ** 2)
+    else:
+        # Assume prev_position holds a tuple: (previous_position, previous_speed)
+        prev_pos, prev_speed = prev_position
+        speed = prev_speed + acc * dt
+        pos = prev_pos + speed * dt
+
 
     vals = {"position": pos, "speed": speed, "acceleration": acc}
-    print(f"Sensor data: {vals}")
+    print(f"{robot_addr} Sensor data: {vals}")
     
-    return vals, pos
+    return vals, pos, speed
 
 def get_preceding_state(robot, preceding_addr, dt, prev_preceding_pos):
     """
@@ -149,8 +159,8 @@ def main():
 
         # --- Leader Control ---
         # Get leader sensor data (using wrapper function)
-        leader_sensor, new_leader_pos = get_sensor_data(robot_interface, leader_addr, prev_leader_pos, dt)
-        prev_leader_pos = new_leader_pos
+        leader_sensor, new_leader_pos, new_leader_speed = get_sensor_data(robot_interface, leader_addr, prev_leader_pos, dt_actual)
+        prev_leader_pos = new_leader_pos, new_leader_speed
         # Compute control command for leader
         leader_command = leader_controller.compute_command(leader_sensor, current_time, dt_actual)
         # ************** For simplicity, we assume the control command is a motor speed command.
@@ -165,10 +175,10 @@ def main():
 
         # --- Follower Control ---
         # Get follower sensor data
-        follower_sensor, new_follower_pos = get_sensor_data(robot_interface, follower_addr, prev_follower_pos, dt)
-        prev_follower_pos = new_follower_pos
+        follower_sensor, new_follower_pos, new_follower_speed = get_sensor_data(robot_interface, follower_addr, prev_follower_pos, dt_actual)
+        prev_follower_pos = new_follower_pos ,new_follower_speed
         # Get preceding (leader) state for the follower
-        preceding_state, new_preceding_pos = get_preceding_state(robot_interface, leader_addr, dt, prev_leader_state_pos)
+        preceding_state, new_preceding_pos = get_preceding_state(robot_interface, leader_addr, dt_actual, prev_leader_state_pos)
         prev_leader_state_pos = new_preceding_pos
 
         # Compute control command for follower
@@ -183,6 +193,8 @@ def main():
 
         # Optional: Print debug information
         print(f"[{current_time:5.2f}s] Leader command: {leader_command:.3f} | Follower command: {follower_command:.3f}")
+        # Clear the console using ANSI escape codes (works in most Unix-like terminals and Windows terminals with ANSI support)
+        print("\033[2J\033[H", end="")
 
         # Enforce constant dt:
         loop_elapsed = time.time() - prev_time
