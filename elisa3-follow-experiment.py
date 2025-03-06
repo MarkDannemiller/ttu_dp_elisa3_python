@@ -30,7 +30,9 @@ def get_sensor_data(robot, robot_addr, prev_position, dt):
     # else:
     #     speed = (pos - prev_position) / dt
     # Get acceleration from the accelerometer (assume getAccX returns acceleration in m/s^2)
-    acc = robot.getAccX(robot_addr)
+    raw_acc = robot.getAccX(robot_addr)
+    # Convert raw acceleration to m/s^2. Scale factor: (2g / 128) and 1g = 9.81 m/s^2.
+    acc = raw_acc * (2 * 9.81 / 128)
     if prev_position is None:
         # Initialize with zero starting speed and position
         speed = acc * dt
