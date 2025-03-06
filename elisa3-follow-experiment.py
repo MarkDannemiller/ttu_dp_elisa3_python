@@ -117,9 +117,11 @@ def main():
     # Choose robot addresses (example addresses; these must match your setup)
     # For this experiment, we assume robot with address 0x1001 is the leader,
     # and robot with address 0x1002 is the follower.
-    leader_addr = 0x1001
-    follower_addr = 0x1002
-
+    leader_addr = 3827
+    follower_addr = 4687
+    elisa_control = Elisa3(3827)
+    elisa_control.setRed(elisa_control.robotAddress[0], 255)
+    # elisa_control.setGreen(elisa_control.robotAddress[1], 255)
     # Instantiate the Elisa3 interface.
     # For simplicity, we assume the Elisa3 class handles multiple robots.
     robot_interface = Elisa3([leader_addr, follower_addr])

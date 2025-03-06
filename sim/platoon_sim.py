@@ -472,11 +472,12 @@ if __name__ == "__main__":
     plt.xlabel("Time (s)")
     plt.ylabel("Speed (m/s)")
     plt.title("Speed Profiles (Smooth Leader)")
-    plt.legend()
+    plt.legend(prop={'size': 25})
     plt.tight_layout()
     fig1.savefig("speed_profiles.png")
-    plt.close(fig1)
-    
+    # plt.close(fig1)
+    plt.show()
+
     # --- Save Gap Errors Figure ---
     fig2 = plt.figure(figsize=(12,6))
     plt.plot(time, gap1, label="Gap Error: Leader - Veh1", color='blue')
@@ -484,11 +485,12 @@ if __name__ == "__main__":
     plt.xlabel("Time (s)")
     plt.ylabel("Gap Error (m)")
     plt.title("Time Gap Errors")
-    plt.legend()
+    plt.legend(prop={'size': 25})
     plt.tight_layout()
     fig2.savefig("gap_errors.png")
-    plt.close(fig2)
-    
+    # plt.close(fig2)
+    plt.show()
+
     # --- Save Speed Errors Figure ---
     fig3 = plt.figure(figsize=(12,6))
     plt.plot(time, sp1, label="Speed Error: Leader - Veh1", color='blue')
@@ -496,10 +498,11 @@ if __name__ == "__main__":
     plt.xlabel("Time (s)")
     plt.ylabel("Speed Error (m/s)")
     plt.title("Speed Errors")
-    plt.legend()
+    plt.legend(prop={'size': 25})
     plt.tight_layout()
     fig3.savefig("speed_errors.png")
-    plt.close(fig3)
+    plt.show()
+    # plt.close(fig3)
     
     # Optionally, display the figures if desired:
     # To display, comment out the plt.close(figX) lines above and then execute:
