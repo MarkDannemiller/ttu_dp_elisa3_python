@@ -34,7 +34,7 @@ def piecewise_speed_control(t):
         # If you want a smooth 10-second interpolation from 50 down to 0,
         # be sure to use (t - 20, 10) so it goes from 0 -> 10 over that interval.
         # If you use (t - 25), it starts at a negative alpha. 
-        return interpolate(50, 0, t - 20, 10)
+        return interpolate(50, 0, t - 25, 10)
     else:
         print("done")
         return 0

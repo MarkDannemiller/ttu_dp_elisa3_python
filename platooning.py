@@ -1,6 +1,6 @@
 import time
 from struct import pack, unpack
-from .elisa3 import Elisa3
+from elisa3 import Elisa3
 
 # Constants
 DESIRED_TIME_GAP = 2.0  # in seconds

@@ -514,8 +514,8 @@ class Elisa3(threading.Thread):
             if speed < -128:
                 speed = -128
             self.leftSpeed[id] = speed.to_bytes(1, 'big', signed=True)[0]
-            print("left = " + str(self.leftSpeed[id]))
-            print("tx left speed = " + str(self.speed(self.leftSpeed[id])))
+            # print("left = " + str(self.leftSpeed[id]))
+            # print("tx left speed = " + str(self.speed(self.leftSpeed[id])))
 
     def setRightSpeed(self, robotAddr, speed):
         """Set the left speed of the robot.
