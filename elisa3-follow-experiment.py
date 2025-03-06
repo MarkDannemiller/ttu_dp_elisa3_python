@@ -31,8 +31,11 @@ def get_sensor_data(robot, robot_addr, prev_position, dt):
         speed = (pos - prev_position) / dt
     # Get acceleration from the accelerometer (assume getAccX returns acceleration in m/s^2)
     acc = robot.getAccX(robot_addr)
+
+    vals = {"position": pos, "speed": speed, "acceleration": acc}
+    print(f"Sensor data: {vals}")
     
-    return {"position": pos, "speed": speed, "acceleration": acc}, pos
+    return vals, pos
 
 def get_preceding_state(robot, preceding_addr, dt, prev_preceding_pos):
     """
@@ -125,6 +128,7 @@ def main():
     # Instantiate the Elisa3 interface.
     # For simplicity, we assume the Elisa3 class handles multiple robots.
     robot_interface = Elisa3([leader_addr, follower_addr])
+    robot_interface.start()
 
     # Create ExperimentController instances.
     # For the leader, we use role "leader"; for the follower, "follower".
