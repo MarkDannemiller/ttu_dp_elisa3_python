@@ -1,0 +1,37 @@
+%% Compute the best Gamma2 based on given k11,k12,k13
+h = 1;
+delta_0 = 4.5;
+
+k_1_1 = 0.1;
+k_1_2 = 0.1;
+k_1_3 = 0.1;
+e_1_1 = 1.0;
+e_1_2 = 0.5;
+e_1_3 = 0.1;
+
+k_2_1 = 0.1;
+k_2_2 = 0.1;
+k_2_3 = 0.1;
+eps_2_2 = 0.1;
+eps_2_3 = 0.01;
+
+
+
+[K1,B1,A1] = ComputeClosedDynamicsVeh1(delta_0,h,k_1_1,k_1_2,k_1_3,e_1_1,e_1_2,e_1_3);
+
+e_2_2_test = 0.1:0.1:2.0;
+
+GAMMA2_test = zeros(length(e_2_2_test),1);
+
+
+for i = 1:1:length(e_2_2_test)
+    [GAMMA2,kappa2] = ComputeGamma2(delta_0,h,k_2_1,k_2_2,k_2_3,eps_2_1,e_2_2_test(i),e_2_3,GAMMA1,K1,B1,A1);
+    
+    GAMMA2_test(i) = GAMMA1;
+end
+
+figure()
+plot(e_2_2_test,GAMMA2_test)
+
+
+

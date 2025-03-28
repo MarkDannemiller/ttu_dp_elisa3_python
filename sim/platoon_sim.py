@@ -133,14 +133,15 @@ def vehicle1_controller_new(e_x1, e_v1, a1, v1, h, k11, k12, k13, m1, tau1, Af1,
     Returns:
       u1: Control input for Vehicle 1.
 
-    This implementation follows the backstepping steps:
-      1. Compute z1_1 = e_x1 - h*e_v1  [Eq. (12)]
-      2. Set virtual speed control: bar_e_v1 = - (k11 + (h*delta0)/(2*epsilon11))*z1_1  [Eq. (19)]
-      3. Compute z1_2 = e_v1 - bar_e_v1, then set bar_a1 = z1_1 + p1*e_v1 + q1*z1_2, where
-         p1 = k11 + (h*delta0)/(2*epsilon11) and
-         q1 = k12 + |1 - k11*h - (h^2*delta0)/(2*epsilon11)|*(delta0/(2*epsilon12))  [Eqs. (27)-(29)]
-      4. Compute z1_3 = a1 - bar_a1
-      5. Finally, compute u1 = g1^{-1} [ -f_dyn(v1,a1) + p1*z1_1 + (2+p1*q1)*e_v1 - (p1+q1)*a1 - k13*z1_3 - |h+p1*q1-p1-q1|*(delta0/(2*epsilon13))*z1_3 ]  [Eq. (36)]
+    Backstepping steps:
+      1. z1_1 = e_x1 - h*e_v1.
+      2. p1 = k11 + (h*delta0)/(2*epsilon11) and virtual speed: bar_e_v1 = -p1*z1_1.
+      3. z1_2 = e_v1 - bar_e_v1, with q1 = k12 + |1 - k11*h - (h^2*delta0)/(2*epsilon11)|*(delta0/(2*epsilon12));
+         virtual acceleration: bar_a1 = z1_1 + p1*e_v1 + q1*z1_2.
+      4. z1_3 = a1 - bar_a1.
+      5. r1 = k13 + abs(h + q1*k11*h + (q1*h**2*delta0)/(2*epsilon11) - p1 - q1)*(delta0/(2*epsilon13)).
+      6. u1 = ( -f_dyn(v1,a1) + p1*z1_1 + (2+p1*q1)*e_v1 - (p1+q1)*a1 - r1*z1_3 ) / g_dyn(v1)
+         and saturate to [-delta0, delta0].
       
     Note: g1(v1) = 1/(m1*tau1) and f_dyn(v1,a1) is as defined in the dynamics.
     """
@@ -161,13 +162,14 @@ def vehicle1_controller_new(e_x1, e_v1, a1, v1, h, k11, k12, k13, m1, tau1, Af1,
     f_val = - (1.0 / tau1) * (a1 + (Af1 * air_density * Cd1 * v1**2) / (2.0 * m1) + Cr1) - (Af1 * air_density * Cd1 * v1 * a1) / m1
     g_val = 1.0 / (m1 * tau1)
     
+    # Compute r1 using the MATLAB formula
+    r1 = k13 + abs(h + q1 * k11 * h + (q1 * h**2 * delta0)/(2.0 * epsilon11) - p1 - q1) * (delta0/(2.0 * epsilon13))
     # Control law as per Eq. (36)
     u1_unsat = (- f_val 
                 + p1 * z1_1 
                 + (2 + p1 * q1) * e_v1 
                 - (p1 + q1) * a1 
-                - k13 * z1_3 
-                - abs(h + p1 * q1 - p1 - q1) * (delta0 / (2.0 * epsilon13)) * z1_3)
+                - r1 * z1_3)
     
     u1 = (1.0 / g_val) * u1_unsat
 
@@ -204,14 +206,27 @@ def vehicle2_controller(v2, a2,
       epsilon23   : Tuning parameter ε_{2,3} (positive)
       saturate    : If True, saturate the control input to [-delta0, delta0]
 
+          Dynamics:
+      f2 = - (1/tau)*(a2 + (Af*rho*Cd*v2^2)/(2*m) + Cr) - (Af*rho*Cd*v2*a2)/m,
+      g2 = 1/(m*tau).
+
+    The controller uses:
+      P2 = k22 + (h*delta0)/(2*epsilon22)*|coupling_B|
+      Q2 = k23 + abs((k21+P2)*h*coupling_B - coupling_term) * (delta0/(2*epsilon23))
+      Coefficients:
+         coeff1 = (2 - k211)*k21 + P2,
+         coeff2 = 2 - k211 - (k21+P2)*P2,
+         coeff3 = k21 + P2 + Q2.
+    Then control law is:
+      u2 = ( -f2 - coeff1*z2_1 + coeff2*z2_2 - coeff3*z2_3 + coupling_term ) / g2,
+      saturated to [-delta0, delta0].
+
     Returns:
       u2 (float) : The computed control input for vehicle 2.
     """
 
     # Dynamics of vehicle 2:
-    # f2(v2,a2) = -1/tau * ( a2 + (Af*rho*Cd*v2^2)/(2*m) + Cr ) - (Af*rho*Cd*v2*a2)/m
     f2 = - (1.0/tau) * (a2 + (Af * rho * Cd * v2**2) / (2 * m) + Cr) - (Af * rho * Cd * v2 * a2) / m
-    # g2(v2) = 1/(m*tau)
     g2 = 1.0 / (m * tau)
     
     # Compute P2 using the coupling_B term:
@@ -219,7 +234,7 @@ def vehicle2_controller(v2, a2,
     
     # Compute Q2:
     # Note: coupling_B - h*(k21+P2)*coupling_B = coupling_B*(1 - h*(k21+P2))
-    Q2 = k23 + abs(coupling_B * (1 - h*(k21 + P2))) * (delta0 / (2 * epsilon23))
+    Q2 = k23 + abs((k21 + P2) * h * coupling_B - coupling_term) * (delta0 / (2 * epsilon23))
     
     # Coefficients as per the derived controller:
     coeff1 = (2 - k211) * k21 + P2
@@ -228,7 +243,7 @@ def vehicle2_controller(v2, a2,
 
     # Compute the composite control law:
     # u2 = g2^{-1} * { -f2 - coeff1*z2_1 + coeff2*z2_2 - coeff3*z2_3 + coupling_term }
-    u2 = (1.0 / g2) * (-f2 - coeff1 * z2_1 + coeff2 * z2_2 - coeff3 * z2_3 + coupling_term)
+    u2 = (1.0 / g2) * (-f2 - coeff1*z2_1 + coeff2*z2_2 - coeff3*z2_3 + coupling_term)
 
     # Optionally saturate the control input to the interval [-delta0, delta0]
     if saturate:

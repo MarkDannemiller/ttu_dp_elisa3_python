@@ -1,0 +1,4 @@
+numpy
+scipy
+matplotlib
+robotics-toolbox-python

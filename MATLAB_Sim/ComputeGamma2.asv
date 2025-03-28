@@ -1,0 +1,7 @@
+function GAMMA2 = ComputeGamma2(delta_0,h,k_2_1,k_2_2,k_2_3,e_2_1,e_2_2,e_2_3,GAMMA1,K1,B1,A1)
+
+
+
+C1 = 
+C2 = 
+GAMMA2 = GAMMA1+C1*h*delta_0*e_2_1/2+C2*delta_0*e_2_3/2;

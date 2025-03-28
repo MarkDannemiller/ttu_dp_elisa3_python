@@ -1,0 +1,75 @@
+function [u,e_x,e_v,A1,B1,K1,ZX1,GAMMA1] = BackSteppingCF_Veh1(X,t,Veh0_Time_Step,Veh0_Pos,Veh0_Spd)
+ 
+P_t = interp1(Veh0_Time_Step,Veh0_Pos,t); %target vehicle position  
+V_t = interp1(Veh0_Time_Step,Veh0_Spd,t); %target vehicle speed
+
+% m = 5760;%mass
+
+m = 1000;%mass
+Af = 7.5;%Effective frontal area
+rho = 1.206;%air mass density
+Cd = 0.51;%aero drag force coefficient
+Cr = 0.0041*9.8;%rolling resistance coefficient
+Tau = 0.02;%powertrain response time lag
+L = 5; %vehicle length
+
+fi = -(X(3)+Af*rho*Cd*X(2)^2/(2*m)+Cr)/Tau-Af*rho*Cd*X(2)*X(3)/m;
+gi = 1/(m*Tau);
+
+h = 1; %desired time gap
+
+e_x = P_t-X(1)-L-h*X(2); %gap error 
+e_v = V_t-X(2); %speed error
+a = X(3);
+
+delta_0 = 4.5;
+k_1_1 = 0.1;
+k_1_2 = 0.1;
+k_1_3 = 0.1;
+e_1_1 = 1.0;
+e_1_2 = 1.0;
+e_1_3 = 0.1;
+
+p_1 = k_1_1+h*delta_0/(2*e_1_1);
+q_1 = k_1_2+abs(1-k_1_1*h-(h^2*delta_0)/(2*e_1_1))*delta_0/(2*e_1_2);
+r_1 = k_1_3+abs(h+q_1*k_1_1*h+q_1*h^2*delta_0/(2*e_1_1)-p_1-q_1)*delta_0/(2*e_1_3);
+
+Z_1_1 = e_x-h*e_v;
+e_v_bar = -p_1*Z_1_1;
+Z_1_2 = e_v-e_v_bar;
+a_bar = Z_1_1;
+Z_1_3 = a - Z_1_1-p_1*e_v-q_1*Z_1_2;
+
+ZX1 = [Z_1_1;Z_1_2;Z_1_3];
+
+% u = (-fi+(k_1_1+h*delta_0/2*e_1_1)*Z_1_1-(-2+q_1*k_1_1+q_1*h*delta_0/(2*e_1_1))*e_v-(p_1-q_1)*a-r_1*Z_1_3)/gi;
+u = (-fi+p_1*Z_1_1+(2+q_1*k_1_1+q_1*h*delta_0/(2*e_1_1))*e_v-(p_1+q_1)*a-r_1*Z_1_3)/gi;
+
+a11 = -p_1;
+a12 = 1;
+a13 = 0;
+% a21 = -1+q_1*k_1_1+q_1*h*delta_0/(2*e_1_1)-(k_1_1+h*delta_0/(2*e_1_1))*(p_1+q_1+k_1_1+h*delta_0/(2*e_1_1));
+a21 = -1;
+% a22 = p_1+q_1+k_1_1+h*delta_0/(2*e_1_1);
+a22 = -q_1;
+a23 = -1;
+a31 = 0;
+a32 = 1;
+% a33 = -k_1_3-abs(h-q_1*k_1_1*h-q_1*h^2*delta_0/(2*e_1_1)-p_1+q_1)*delta_0/(2*e_1_1);
+a33 = -k_1_3-abs(h+q_1*k_1_1*h+(q_1*h^2*delta_0)/(2*e_1_1)-p_1-q_1)*delta_0/(2*e_1_3);
+b1 = -h;
+% b2 = 1-k_1_1-h^2*delta_0/(2*e_1_1);
+b2 = 1-k_1_1*h-(h^2*delta_0)/(2*e_1_1);
+% b3 = h-q_1*k_1_1*h-q_1*h^2*delta_0/(2*e_1_1)-p_1+q_1;
+b3 = h+q_1*k_1_1*h+q_1*h^2*delta_0/(2*e_1_1)-p_1-q_1;
+
+k1 = 1-p_1*p_1;
+% k2 = p_1-q_1;
+k2 = p_1+q_1;
+k3 = 1;
+
+A1 = [a11,a12,a13;a21,a22,a23;a31,a32,a33];
+B1 = [b1;b2;b3];
+K1 = [k1;k2;k3];
+
+GAMMA1 = h*delta_0*e_1_1/2+abs(1-k_1_1*h-h^2*delta_0/(2*e_1_1))*delta_0*e_1_2/2+abs(h+q_1*k_1_1*h+q_1*h^2*delta_0/(2*e_1_1)-p_1-q_1)*delta_0*e_1_3/2;

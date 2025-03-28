@@ -1,0 +1,33 @@
+%% Compute the best bound based on given k11,k12,k13
+h = 1;
+delta_0 = 4.5;
+k_1_1 = 0.1;
+k_1_2 = 0.1;
+k_1_3 = 0.1;
+e_1_1 = 1.0;
+e_1_2 = 1.0;
+e_1_3 = 0.1;
+
+
+e_1_1_test = 0.1:0.1:2.0;
+e_1_2_test = 0.1:0.1:2.0;
+GAMMA1_test = zeros(length(e_1_1_test),1);
+
+
+for i = 1:1:length(e_1_1_test)
+    [GAMMA1,kappa1] = ComputeGamma1(delta_0,h,k_1_1,k_1_2,k_1_3,e_1_1_test(i),e_1_2,e_1_3);
+    
+    GAMMA1_test(i) = GAMMA1;
+end
+
+figure()
+plot(e_1_1_test,GAMMA1_test)
+
+for i = 1:1:length(e_1_1_test)
+    [GAMMA1,kappa1] = ComputeGamma1(delta_0,h,k_1_1,k_1_2,k_1_3,e_1_1_test(i),e_1_2,e_1_3);
+    
+    GAMMA1_test(i) = GAMMA1;
+end
+
+figure()
+plot(e_1_1_test,GAMMA1_test)

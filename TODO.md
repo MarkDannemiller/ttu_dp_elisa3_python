@@ -1,2 +1,0 @@
-- [ ] Make `elisa3` a python package with a setup script for development
-- [ ] Organize example files
