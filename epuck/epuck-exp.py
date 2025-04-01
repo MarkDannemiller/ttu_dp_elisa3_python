@@ -2,7 +2,12 @@
 import time
 import numpy as np
 from unifr_api_epuck import wrapper
-from ..experiment_controller import ExperimentController
+import sys
+import os
+
+# Add the parent directory to the Python path to allow importing experiment_controller
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from experiment_controller import ExperimentController
 
 # TODO: Parameterize these values for the Epuck platform
 # - Mass (m)
@@ -11,6 +16,13 @@ from ..experiment_controller import ExperimentController
 # - Rolling resistance (Cr)
 # - Response lag (tau)
 # - Check if Epuck has built-in odometry for position tracking
+# - Verify motor steps to distance conversion factor
+
+# Constants for Epuck
+WHEEL_DISTANCE = 0.053  # Distance between wheels in meters
+STEPS_PER_REVOLUTION = 1000  # Number of steps per wheel revolution
+WHEEL_DIAMETER = 0.041  # Wheel diameter in meters
+STEPS_TO_METERS = (WHEEL_DIAMETER * np.pi) / STEPS_PER_REVOLUTION  # Conversion factor from steps to meters
 
 # --- Helper functions to wrap sensor data from an Epuck instance ---
 def get_sensor_data(robot, prev_position, dt):
@@ -23,7 +35,7 @@ def get_sensor_data(robot, prev_position, dt):
     We use Epuck getters:
       - get_speed: for wheel speeds
       - get_accelerometer_axes: for acceleration
-      - (We integrate speed to get position)
+      - get_motors_steps: for position tracking
     """
     # Get wheel speeds from the Epuck
     left_speed, right_speed = robot.get_speed()
@@ -35,13 +47,13 @@ def get_sensor_data(robot, prev_position, dt):
     # Convert raw acceleration to m/s^2 (assuming similar scale as Elisa3)
     acc = acc_x * (2 * 9.81 / 128)  # Similar scaling as Elisa3 TODO verify
 
-    if prev_position is None:
-        # Initialize with zero starting position
-        pos = 0.0
-    else:
-        # Integrate speed to get position
-        prev_pos, _ = prev_position
-        pos = prev_pos + speed * dt
+    # Get motor steps for position tracking
+    left_steps, right_steps = robot.get_motors_steps()
+    
+    # Convert steps to distance (average of both wheels)
+    left_distance = left_steps * STEPS_TO_METERS
+    right_distance = right_steps * STEPS_TO_METERS
+    pos = (left_distance + right_distance) / 2.0
 
     vals = {"position": pos, "speed": speed, "acceleration": acc}
     print(f"Robot Sensor data: {vals}")
@@ -62,11 +74,13 @@ def get_preceding_state(robot, dt, prev_preceding_pos):
     acc_x, acc_y, acc_z = robot.get_accelerometer_axes()
     acc = acc_x * (2 * 9.81 / 128)  # Similar scaling as Elisa3 TODO verify for Epuck
 
-    if prev_preceding_pos is None:
-        pos = 0.0
-    else:
-        prev_pos, _ = prev_preceding_pos
-        pos = prev_pos + speed * dt
+    # Get motor steps for position tracking
+    left_steps, right_steps = robot.get_motors_steps()
+    
+    # Convert steps to distance (average of both wheels)
+    left_distance = left_steps * STEPS_TO_METERS
+    right_distance = right_steps * STEPS_TO_METERS
+    pos = (left_distance + right_distance) / 2.0
 
     return {"position": pos, "speed": speed, "acceleration": acc}, pos
 
@@ -112,9 +126,9 @@ def main():
     # Define physical parameters and control parameters
     # TODO: Update these parameters based on Epuck specifications
     params = {
-        "m": 0.039,              # mass (kg) - needs verification for Epuck
+        "m": 0.130,              # mass (kg) -  VERIFIED
         "tau": 0.5,              # response lag (s) - needs verification
-        "Af": 0.0015,            # frontal area (m^2) - needs verification
+        "Af": 0.0028,            # frontal area (m^2) - VERIFIED
         "air_density": 1.225,    # kg/m^3
         "Cd": 0.3,               # drag coefficient - needs verification
         "Cr": 0.015,             # rolling resistance - needs verification
@@ -138,10 +152,10 @@ def main():
     dt = 0.05  # control loop period (s); adjust as needed
 
     # Initialize Epuck robots
-    leader_ip = '192.168.43.125'  # Replace with actual IP
-    follower_ip = '192.168.43.126'  # Replace with actual IP
+    leader_ip = '10.179.226.29'  # EPUCK-5431
+    follower_ip = '10.179.226.32'  # EPUCK-5474
     
-    leader = wrapper.get_robot(leader_ip)
+    leader = wrapper.get_robot(leader_ip) # Gets a WifiEpuck
     follower = wrapper.get_robot(follower_ip)
     
     # Initialize sensors
