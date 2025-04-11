@@ -214,12 +214,12 @@ def main():
         "Cd": 0.3,               # drag coefficient - needs verification
         "Cr": 0.015,             # rolling resistance - needs verification
         "h": 0.8,                # desired time gap (s)
-        "experiment_duration": 10.0  # seconds
+        "experiment_duration": 20.0  # seconds
     }
     # TODO: Tune these control parameters for Epuck
     control_params = {
         "k11": 0.005,          # positive gain for stage 1
-        "k12": 0.005,          # gain for stage 2 (q1 computation)
+        "k12": 0.005,          # gain for sJtage 2 (q1 computation)
         "k13": 0.005,          # gain for stage 3 (final control)
         "epsilon11": 200.0,    
         "epsilon12": 200.0,
@@ -245,8 +245,8 @@ def main():
     experiment_data = []
 
     # Initialize Epuck robots
-    leader_ip = '192.168.0.158'  # EPUCK-5431
-    follower_ip = '192.168.0.51'  # EPUCK-5474
+    leader_ip = '192.168.0.158'  # EPUCK-5474
+    follower_ip = '192.168.0.51'  # EPUCK-5431
     
     leader = wrapper.get_robot(leader_ip) # Gets a WifiEpuck
     follower = wrapper.get_robot(follower_ip)
@@ -293,7 +293,7 @@ def main():
         
         # Pass leader command and proximity data to the orientation control function
         prox = send_command(leader, leader.get_prox) if leader_connection else [0] * 8
-        leader_left_speed, leader_right_speed = orientation_control(prox, leader_speed)
+        leader_left_speed, leader_right_speed = leader_speed, leader_speed # orientation_control(prox, leader_speed)
         
         # Send speed commands to the leader robot
         if leader_connection:
@@ -314,7 +314,7 @@ def main():
         
         # Pass follower command and proximity data to the orientation control function
         prox = send_command(follower, follower.get_prox) if follower_connection else [0] * 8
-        follower_left_speed, follower_right_speed = orientation_control(prox, follower_speed)
+        follower_left_speed, follower_right_speed = follower_speed, follower_speed # orientation_control(prox, follower_speed)
         
         # Send speed commands to the follower robot
         if follower_connection:
