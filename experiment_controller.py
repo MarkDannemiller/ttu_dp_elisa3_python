@@ -11,11 +11,12 @@ from sim.platoon_sim import vehicle2_controller
 #
 # Also, assume a simple PID controller is either implemented here or imported.
 
+
 class ExperimentController:
     def __init__(self, role, params, control_params, dt=0.01):
         """
         Initializes the ExperimentController.
-        
+
         Parameters:
           role           : A string, either 'leader' or 'follower'
           params         : Dictionary of physical parameters:
@@ -38,7 +39,7 @@ class ExperimentController:
         self.params = params
         self.control_params = control_params
         self.nominal_dt = dt
-        
+
         # PID state for both leader and follower:
         self.integral_error = 0.0
         self.previous_error = 0.0
@@ -54,10 +55,11 @@ class ExperimentController:
         """
         Returns desired leader speed and acceleration at time t.
         Uses half-cosine transitions similar to the simulation.
-        
+
         Speed values are tuned for the Epuck robot's capabilities.
         Maximum linear speed: ~0.154 m/s (based on MAX_ANGULAR_SPEED * WHEEL_RADIUS)
         """
+
         def half_cosine_transition(t, t0, t1, v0, v1):
             if t <= t0:
                 return v0, 0.0
@@ -93,53 +95,60 @@ class ExperimentController:
     def compute_leader_command(self, sensor_data, t, dt_actual):
         """
         Computes the control command for a leader robot.
-        
+
         Inputs:
           sensor_data: Dictionary with keys 'position', 'speed', 'acceleration'
           t          : Current time (s)
           dt_actual  : The actual elapsed time since the last control cycle.
-          
+
         Returns:
           command    : Control output (e.g., voltage, PWM, etc.) for speed tracking.
         """
         # Get desired speed and acceleration from the profile.
         desired_speed, desired_accel = self.leader_profile(t)
         current_speed = sensor_data.get("speed", 0.0)
-        
+
         # Compute error for PID
         error = desired_speed - current_speed
         self.integral_error += error * dt_actual
-        derivative_error = (error - self.previous_error) / dt_actual if dt_actual > 0 else 0.0
+        derivative_error = (
+            (error - self.previous_error) / dt_actual if dt_actual > 0 else 0.0
+        )
         self.previous_error = error
-        
+
         kp = self.control_params.get("leader_kp", 1.0)
         ki = self.control_params.get("leader_ki", 0.1)
         kd = self.control_params.get("leader_kd", 0.05)
-        
+
         # Simple PID control law (feedforward with desired acceleration can be added)
         command = kp * error + ki * self.integral_error + kd * derivative_error
         return command
 
     def compute_follower_command(self, sensor_data, preceding_state, dt_actual):
         """
-        For the follower, we first use the high-level backstepping controller 
-        to obtain an acceleration command (in m/s²). Then we integrate this 
-        to update a desired speed. Finally, a low-level PID speed controller 
-        converts the speed error (between the desired speed and measured speed) 
+        For the follower, we first use the high-level backstepping controller
+        to obtain an acceleration command (in m/s²). Then we integrate this
+        to update a desired speed. Finally, a low-level PID speed controller
+        converts the speed error (between the desired speed and measured speed)
         into a motor command.
-        
+
         sensor_data: Dictionary with keys 'position', 'speed', 'acceleration'
         preceding_state: Dictionary for the preceding robot with same keys.
         """
         h = self.params["h"]
         # Compute gap error and speed error:
-        e_x = preceding_state["position"] - sensor_data["position"] - h * sensor_data["speed"]
+        e_x = (
+            preceding_state["position"]
+            - sensor_data["position"]
+            - h * sensor_data["speed"]
+        )
         e_v = preceding_state["speed"] - sensor_data["speed"]
 
         # Here we assume vehicle1_controller_new (the high-level backstepping controller)
         # returns an acceleration command based on the error.
         a_command = vehicle1_controller_new(
-            e_x, e_v,
+            e_x,
+            e_v,
             sensor_data["acceleration"],
             sensor_data["speed"],
             h,
@@ -155,38 +164,39 @@ class ExperimentController:
             self.control_params["delta0"],
             self.control_params["epsilon11"],
             self.control_params["epsilon12"],
-            self.control_params["epsilon13"]
+            self.control_params["epsilon13"],
         )
         # Integrate the acceleration command to update desired speed:
         self.desired_speed += a_command * dt_actual
         # Optionally, clamp the desired speed to a valid range:
         v_min, v_max = 0.0, 0.3  # for instance, for a palm-sized robot
         self.desired_speed = max(v_min, min(v_max, self.desired_speed))
-        
+
         # Now run a low-level PID speed controller:
         error = self.desired_speed - sensor_data["speed"]
         self.pid_integral += error * dt_actual
         derivative = (error - self.pid_prev_error) / dt_actual if dt_actual > 0 else 0.0
         self.pid_prev_error = error
-        
+
         # Use follower-specific PID gains:
         kp = self.control_params.get("follower_kp", 1.0)  # Proportional gain (unitless)
         ki = self.control_params.get("follower_ki", 0.1)  # Integral gain (unitless)
         kd = self.control_params.get("follower_kd", 0.05)  # Derivative gain (unitless)
-        motor_command = kp * error + ki * self.pid_integral + kd * derivative  # Output in m/s
-        
+        motor_command = (
+            kp * error + ki * self.pid_integral + kd * derivative
+        )  # Output in m/s
 
         return motor_command
 
     def compute_command(self, sensor_data, t, preceding_state=None, dt_actual=None):
         """
         Computes the control command based on the role.
-        
+
         Inputs:
           sensor_data    : Dictionary with keys 'position', 'speed', 'acceleration'
           t              : Current time (s)
           preceding_state: (Optional) Dictionary for follower robots.
-          
+
         Returns:
           command        : The computed control output.
         """
@@ -197,9 +207,12 @@ class ExperimentController:
         elif self.role == "follower":
             if preceding_state is None:
                 raise ValueError("Follower mode requires preceding_state input.")
-            return self.compute_follower_command(sensor_data, preceding_state, dt_actual)
+            return self.compute_follower_command(
+                sensor_data, preceding_state, dt_actual
+            )
         else:
             raise ValueError("Invalid role specified.")
+
 
 # Example usage:
 if __name__ == "__main__":
@@ -212,7 +225,7 @@ if __name__ == "__main__":
         "Cd": 0.3,
         "Cr": 0.015,
         "h": 0.8,
-        "experiment_duration": 120  # seconds
+        "experiment_duration": 120,  # seconds
     }
     control_params = {
         "k11": 0.005,  # positive gains
@@ -224,16 +237,18 @@ if __name__ == "__main__":
         "delta0": 2.0,
         "leader_kp": 1.0,
         "leader_ki": 0.1,
-        "leader_kd": 0.05
+        "leader_kd": 0.05,
     }
-    
+
     # Create an instance for a follower robot (for a leader, omit preceding_state)
-    controller = ExperimentController(role="follower", params=params, control_params=control_params, dt=0.01)
-    
+    controller = ExperimentController(
+        role="follower", params=params, control_params=control_params, dt=0.01
+    )
+
     # Example sensor data for the follower and preceding robot (these would be provided by your robot system)
     sensor_data = {"position": 0.0, "speed": 0.15, "acceleration": 0.0}
     preceding_state = {"position": 1.0, "speed": 0.20, "acceleration": 0.0}
-    
+
     # Compute a command at time t = 1.0 s
     t = 1.0
     command = controller.compute_command(sensor_data, t, preceding_state)
