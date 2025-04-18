@@ -54,6 +54,9 @@ class ExperimentController:
         """
         Returns desired leader speed and acceleration at time t.
         Uses half-cosine transitions similar to the simulation.
+        
+        Speed values are tuned for the Epuck robot's capabilities.
+        Maximum linear speed: ~0.154 m/s (based on MAX_ANGULAR_SPEED * WHEEL_RADIUS)
         """
         def half_cosine_transition(t, t0, t1, v0, v1):
             if t <= t0:
@@ -65,27 +68,27 @@ class ExperimentController:
             accel = (v1 - v0) * 0.5 * (np.pi / (t1 - t0)) * np.sin(np.pi * tau)
             return speed, accel
 
-        # Define time segments (adjust these for your robot as needed)
+        # Define time segments adjusted for Epuck capabilities (MAX_LINEAR_SPEED ~= 0.154 m/s)
         if t < 5:
-            return half_cosine_transition(t, 0, 5, 0.15, 0.21)
+            return half_cosine_transition(t, 0, 5, 0.06, 0.10)  # 60 mm/s to 100 mm/s
         elif t < 10:
-            return half_cosine_transition(t, 5, 10, 0.21, 0.14)
+            return half_cosine_transition(t, 5, 10, 0.10, 0.07)  # 100 mm/s to 70 mm/s
         elif t < 15:
-            return half_cosine_transition(t, 10, 15, 0.14, 0.20)
+            return half_cosine_transition(t, 10, 15, 0.07, 0.12)  # 70 mm/s to 120 mm/s
         elif t < 20:
-            return half_cosine_transition(t, 15, 20, 0.20, 0.13)
+            return half_cosine_transition(t, 15, 20, 0.12, 0.06)  # 120 mm/s to 60 mm/s
         elif t < 30:
-            return half_cosine_transition(t, 20, 30, 0.13, 0.21)
+            return half_cosine_transition(t, 20, 30, 0.06, 0.14)  # 60 mm/s to 140 mm/s
         elif t < 40:
-            return half_cosine_transition(t, 30, 40, 0.21, 0.13)
+            return half_cosine_transition(t, 30, 40, 0.14, 0.06)  # 140 mm/s to 60 mm/s
         elif t < 50:
-            return half_cosine_transition(t, 40, 50, 0.13, 0.21)
+            return half_cosine_transition(t, 40, 50, 0.06, 0.12)  # 60 mm/s to 120 mm/s
         elif t < 60:
-            return half_cosine_transition(t, 50, 60, 0.21, 0.13)
+            return half_cosine_transition(t, 50, 60, 0.12, 0.08)  # 120 mm/s to 80 mm/s
         elif t < 65:
-            return half_cosine_transition(t, 60, 65, 0.13, 0.20)
+            return half_cosine_transition(t, 60, 65, 0.08, 0.10)  # 80 mm/s to 100 mm/s
         else:
-            return 0.20, 0.0
+            return 0.10, 0.0  # 100 mm/s steady state
 
     def compute_leader_command(self, sensor_data, t, dt_actual):
         """
@@ -167,13 +170,12 @@ class ExperimentController:
         self.pid_prev_error = error
         
         # Use follower-specific PID gains:
-        kp = self.control_params.get("follower_kp", 1.0)
-        ki = self.control_params.get("follower_ki", 0.1)
-        kd = self.control_params.get("follower_kd", 0.05)
-        motor_command = kp * error + ki * self.pid_integral + kd * derivative
+        kp = self.control_params.get("follower_kp", 1.0)  # Proportional gain (unitless)
+        ki = self.control_params.get("follower_ki", 0.1)  # Integral gain (unitless)
+        kd = self.control_params.get("follower_kd", 0.05)  # Derivative gain (unitless)
+        motor_command = kp * error + ki * self.pid_integral + kd * derivative  # Output in m/s
         
-        # Saturate motor command to hardware limits (max inputs of robot motors)
-        motor_command = np.clip(motor_command, -128, 127)
+
         return motor_command
 
     def compute_command(self, sensor_data, t, preceding_state=None, dt_actual=None):
