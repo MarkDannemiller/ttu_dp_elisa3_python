@@ -52,6 +52,10 @@ CLEANUP_TIMEOUT = 5.0  # seconds
 LEADER_BASELINE_STEPS = (0, 0)
 FOLLOWER_BASELINE_STEPS = (0, 0)
 
+# Initial positions for the robots (in meters)
+LEADER_INITIAL_POSITION = 0.0     # Leader starts at position 0
+FOLLOWER_INITIAL_POSITION = -0.1  # Follower starts 10cm behind leader
+
 def send_command(robot, command, *args, **kwargs):
     """Wrapper for sending commands to robot with go_on()"""
     try:
@@ -127,14 +131,15 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
     
     # Apply baseline correction
     baseline = LEADER_BASELINE_STEPS if is_leader else FOLLOWER_BASELINE_STEPS
-    corrected_left_steps = left_steps - baseline[0]
-    corrected_right_steps = right_steps - baseline[1]
-    
-    # Set initial position (10cm gap if needed)
-    initial_position = 0.1  # 10 cm
+    corrected_left_steps = max(0, left_steps - baseline[0])  # Ensure non-negative values
+    corrected_right_steps = max(0, right_steps - baseline[1])  # Ensure non-negative values
     
     # Calculate position from motor steps (average of both wheels)
-    current_position = ((corrected_left_steps + corrected_right_steps) / 2 * STEPS_TO_METERS) + initial_position
+    step_distance = ((corrected_left_steps + corrected_right_steps) / 2 * STEPS_TO_METERS)
+    
+    # Apply the initial position offset
+    initial_position = LEADER_INITIAL_POSITION if is_leader else FOLLOWER_INITIAL_POSITION
+    current_position = step_distance + initial_position
     
     # Get current speed from the robot
     try:
@@ -211,14 +216,14 @@ def get_preceding_state(robot, dt, prev_position):
         return {"position": 0.0, "speed": 0.0, "acceleration": 0.0}, (0.0, 0.0)
     
     # Apply baseline correction for leader
-    corrected_left_steps = left_steps - LEADER_BASELINE_STEPS[0]
-    corrected_right_steps = right_steps - LEADER_BASELINE_STEPS[1]
-    
-    # Set initial position (10cm)
-    initial_position = 0.1  # 10 cm
+    corrected_left_steps = max(0, left_steps - LEADER_BASELINE_STEPS[0])  # Ensure non-negative values
+    corrected_right_steps = max(0, right_steps - LEADER_BASELINE_STEPS[1])  # Ensure non-negative values
     
     # Calculate position from motor steps (average of both wheels)
-    current_position = ((corrected_left_steps + corrected_right_steps) / 2 * STEPS_TO_METERS) + initial_position
+    step_distance = ((corrected_left_steps + corrected_right_steps) / 2 * STEPS_TO_METERS)
+    
+    # Apply the leader's initial position
+    current_position = step_distance + LEADER_INITIAL_POSITION
     
     # Get current speed from the robot
     try:
@@ -344,8 +349,8 @@ def main():
         "air_density": 1.225,  # kg/m^3
         "Cd": 0.3,  # drag coefficient - needs verification
         "Cr": 0.015,  # rolling resistance - needs verification
-        "h": 0.8,  # desired time gap (s)
-        "experiment_duration": 10.0,  # seconds
+        "h": 2.0,  # desired time gap (s)
+        "experiment_duration": 20.0,  # seconds
     }
     # TODO: Tune these control parameters for Epuck
     control_params = {
@@ -375,9 +380,13 @@ def main():
     # Initialize data collection
     experiment_data = []
 
-    # Initialize Epuck robots
+    # Initialize Epuck Robot Set 1
     leader_ip = "192.168.0.158"  # EPUCK-5474
     follower_ip = "192.168.0.51"  # EPUCK-5431
+
+    # Initialize Epuck Robot Set 2
+    # leader_ip = "192.168.0.29" # EPUCK-5517
+    # follower_ip = "192.168.0.191" # EPUCK-5515
 
     leader = wrapper.get_robot(leader_ip)  # Gets a WifiEpuck
     follower = wrapper.get_robot(follower_ip)
@@ -441,8 +450,8 @@ def main():
     leader.enable_front_led()
 
     # Variables to store previous positions for finite-difference speed estimation
-    prev_leader_pos = 0, 0
-    prev_follower_pos = -0.1, 0 # 10 cm behind leader
+    prev_leader_pos = LEADER_INITIAL_POSITION, 0  # Initial position and zero speed
+    prev_follower_pos = FOLLOWER_INITIAL_POSITION, 0  # Initial position and zero speed
     prev_leader_state_pos = None  # for preceding state in follower
 
     start_time = time.time()
@@ -558,6 +567,7 @@ def main():
             "follower_right_speed_radps": follower_right_angular,
             "timegap_s": time_gap,
             "timegap_error_s": time_gap_error,
+            "desired_timegap_s": params["h"],
         }
         experiment_data.append(data_point)
 
@@ -567,7 +577,15 @@ def main():
         )
         print("\033[2J\033[H", end="")  # Clear console
         print(f"Frame dt: {dt_actual:.3f}s")
-        print(f"Leader Position: {new_leader_pos}")
+        print(f"Leader Position: {new_leader_pos:.3f} m | Speed: {new_leader_speed:.3f} m/s")
+        print(f"Follower Position: {new_follower_pos:.3f} m | Speed: {new_follower_speed:.3f} m/s")
+        print(f"Gap: {leader_data['position'] - follower_data['position']:.3f} m | Time Gap: {time_gap:.2f} s")
+        
+        if current_time < 1.0:  # Only print motor steps info during the first second
+            leader_steps = send_command(leader, leader.get_motors_steps)
+            follower_steps = send_command(follower, follower.get_motors_steps)
+            print(f"Leader Steps: {leader_steps}, Baseline: {LEADER_BASELINE_STEPS}")
+            print(f"Follower Steps: {follower_steps}, Baseline: {FOLLOWER_BASELINE_STEPS}")
 
         # Enforce constant dt
         loop_elapsed = time.time() - prev_time
