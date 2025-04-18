@@ -263,8 +263,8 @@ def main():
     leader.enable_front_led()
 
     # Variables to store previous positions for finite-difference speed estimation
-    prev_leader_pos = None
-    prev_follower_pos = None
+    prev_leader_pos = 0
+    prev_follower_pos = -0.1 # 10 cm behind leader
     prev_leader_state_pos = None  # for preceding state in follower
 
     start_time = time.time()
@@ -346,6 +346,7 @@ def main():
 
         # Enforce constant dt
         loop_elapsed = time.time() - prev_time
+        print(f"Loop elapsed: {loop_elapsed:.3f}s")
         sleep_time = follower_controller.nominal_dt - loop_elapsed
         if sleep_time > 0:
             time.sleep(sleep_time)
