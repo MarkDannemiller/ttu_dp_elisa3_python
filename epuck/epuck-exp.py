@@ -120,21 +120,36 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
     - dict: A dictionary containing position, speed, and acceleration
     - float: The current position for tracking
     - float: The current speed for tracking
+    - tuple: Raw wheel speeds (left_speed, right_speed) in rad/s
     """
+
+    # Default sensor data values
+    empty_sensor_data = {
+        "position": 0,
+        "speed": 0,
+        "acceleration": 0,
+        "acceleration x": 0,
+        "acceleration y": 0,
+        "acceleration z": 0,
+        "raw_left_speed": 0,  # rad/s
+        "raw_right_speed": 0, # rad/s
+    }
+
+
     # Get the current motor steps (left, right)
     try:
         left_steps, right_steps = send_command(robot, robot.get_motors_steps)
         if left_steps is None or right_steps is None:
             # If we can't get the motor steps, return default values
-            return {"position": 0.0, "speed": 0.0, "acceleration": 0.0}, 0.0, 0.0
+            return empty_sensor_data, 0.0, 0.0, (0.0, 0.0)
     except Exception as e:
         print(f"Error getting motor steps: {e}")
-        return {"position": 0.0, "speed": 0.0, "acceleration": 0.0}, 0.0, 0.0
+        return empty_sensor_data, 0.0, 0.0, (0.0, 0.0)
 
     # Apply baseline correction
     baseline = LEADER_BASELINE_STEPS if is_leader else FOLLOWER_BASELINE_STEPS
-    corrected_left_steps = max(0, left_steps - baseline[0])  # Ensure non-negative values
-    corrected_right_steps = max(0, right_steps - baseline[1])  # Ensure non-negative values
+    corrected_left_steps = left_steps - baseline[0]
+    corrected_right_steps = right_steps - baseline[1]
     
     # Calculate position from motor steps (average of both wheels)
     step_distance = ((corrected_left_steps + corrected_right_steps) / 2 * STEPS_TO_METERS)
@@ -143,8 +158,8 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
     initial_position = LEADER_INITIAL_POSITION if is_leader else FOLLOWER_INITIAL_POSITION
     current_position = step_distance + initial_position
     
-
     # Get current speed from the robot
+    raw_wheel_speeds = (0.0, 0.0)  # Default if we can't get speeds
     try:
         left_speed, right_speed = send_command(robot, robot.get_speed)
         if left_speed is None or right_speed is None:
@@ -155,6 +170,9 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
             else:
                 current_speed = 0.0
         else:
+            # Store raw wheel speeds
+            raw_wheel_speeds = (left_speed, right_speed)
+            
             # Convert from angular velocity to linear velocity
             left_linear = angular_to_linear_velocity(left_speed)
             right_linear = angular_to_linear_velocity(right_speed)
@@ -194,7 +212,7 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
         else:
             acceleration_x = 0.0
 
-    # Return the sensor data dictionary and current position and speed for tracking
+    # Return the sensor data dictionary, current position, speed, and raw wheel speeds
     sensor_data = {
         "position": current_position,
         "speed": current_speed,
@@ -202,32 +220,35 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
         "acceleration x": acceleration_x,
         "acceleration y": acceleration_y,
         "acceleration z": acceleration_z,
+        "raw_left_speed": raw_wheel_speeds[0],  # rad/s
+        "raw_right_speed": raw_wheel_speeds[1], # rad/s
     }
 
-    return sensor_data, current_position, current_speed
+    return sensor_data, current_position, current_speed, raw_wheel_speeds
 
 
 def get_preceding_state(robot, dt, prev_position):
     """
     Get the state of the preceding robot.
-
+    
     Returns:
     - dict: A dictionary containing position, speed, and acceleration
     - tuple: The current position and speed for tracking
+    - tuple: Raw wheel speeds (left_speed, right_speed) in rad/s
     """
     # Same as get_sensor_data for the leader robot but using leader's baseline
     try:
         left_steps, right_steps = send_command(robot, robot.get_motors_steps)
         if left_steps is None or right_steps is None:
             # If we can't get the motor steps, return default values
-            return {"position": 0.0, "speed": 0.0, "acceleration": 0.0}, (0.0, 0.0)
+            return {"position": 0.0, "speed": 0.0, "acceleration": 0.0}, (0.0, 0.0), (0.0, 0.0)
     except Exception as e:
         print(f"Error getting leader motor steps: {e}")
-        return {"position": 0.0, "speed": 0.0, "acceleration": 0.0}, (0.0, 0.0)
-
+        return {"position": 0.0, "speed": 0.0, "acceleration": 0.0}, (0.0, 0.0), (0.0, 0.0)
+    
     # Apply baseline correction for leader
-    corrected_left_steps = max(0, left_steps - LEADER_BASELINE_STEPS[0])  # Ensure non-negative values
-    corrected_right_steps = max(0, right_steps - LEADER_BASELINE_STEPS[1])  # Ensure non-negative values
+    corrected_left_steps = left_steps - LEADER_BASELINE_STEPS[0]
+    corrected_right_steps = right_steps - LEADER_BASELINE_STEPS[1]
     
     # Calculate position from motor steps (average of both wheels)
     step_distance = ((corrected_left_steps + corrected_right_steps) / 2 * STEPS_TO_METERS)
@@ -236,6 +257,7 @@ def get_preceding_state(robot, dt, prev_position):
     current_position = step_distance + LEADER_INITIAL_POSITION
     
     # Get current speed from the robot
+    raw_wheel_speeds = (0.0, 0.0)  # Default if we can't get speeds
     try:
         left_speed, right_speed = send_command(robot, robot.get_speed)
         if left_speed is None or right_speed is None:
@@ -246,6 +268,9 @@ def get_preceding_state(robot, dt, prev_position):
             else:
                 current_speed = 0.0
         else:
+            # Store raw wheel speeds
+            raw_wheel_speeds = (left_speed, right_speed)
+            
             # Convert from angular velocity to linear velocity
             left_linear = angular_to_linear_velocity(left_speed)
             right_linear = angular_to_linear_velocity(right_speed)
@@ -257,7 +282,7 @@ def get_preceding_state(robot, dt, prev_position):
             current_speed = (current_position - prev_pos) / dt
         else:
             current_speed = 0.0
-
+    
     # Get acceleration from accelerometer (primary method)
     try:
         acc_data = send_command(robot, robot.get_accelerometer_axes)
@@ -283,14 +308,16 @@ def get_preceding_state(robot, dt, prev_position):
         else:
             acceleration = 0.0
 
-    # Return the state dictionary and current position and speed for tracking
+    # Return the state dictionary, current position and speed for tracking, and raw wheel speeds
     state = {
         "position": current_position,
         "speed": current_speed,
         "acceleration": acceleration,
+        "raw_left_speed": raw_wheel_speeds[0],  # rad/s
+        "raw_right_speed": raw_wheel_speeds[1], # rad/s
     }
-
-    return state, (current_position, current_speed)
+    
+    return state, (current_position, current_speed), raw_wheel_speeds
 
 
 def orientation_control(prox, forward_speed):
@@ -471,14 +498,16 @@ def main():
     prev_leader_state_pos = None  # for preceding state in follower
 
     start_time = time.time()
-    prev_time = start_time
+    prev_loop_start = start_time
     experiment_duration = params["experiment_duration"]
-    loop_elapsed = 0
 
     while (time.time() - start_time) < experiment_duration:
+        loop_start = time.time()
+        dt_actual = loop_start - prev_loop_start
+        prev_loop_start = loop_start
         current_time = time.time() - start_time
-        dt_actual = time.time() - prev_time
-        prev_time = time.time()
+        # dt_actual = time.time() - prev_time
+        # prev_time = time.time()
 
         # Check connections
         leader_connection = check_connection(leader)
@@ -486,13 +515,13 @@ def main():
 
         # --- Leader Control ---
         # Get leader sensor data
-        leader_data, new_leader_pos, new_leader_speed = get_sensor_data(
+        leader_data, new_leader_pos, new_leader_speed, leader_raw_wheel_speeds = get_sensor_data(
             leader, prev_leader_pos, dt_actual, is_leader=True
         )
         prev_leader_pos = new_leader_pos, new_leader_speed
         leader_accx = leader_data["acceleration x"]
         leader_accy = leader_data["acceleration y"]
-        leader_accy = leader_data["acceleration z"]
+        leader_accz = leader_data["acceleration z"]
 
         # Compute control command for leader
         leader_command = leader_controller.compute_command(
@@ -523,16 +552,16 @@ def main():
 
         # --- Follower Control ---
         # Get follower sensor data
-        follower_data, new_follower_pos, new_follower_speed = get_sensor_data(
+        follower_data, new_follower_pos, new_follower_speed, follower_raw_wheel_speeds = get_sensor_data(
             follower, prev_follower_pos, dt_actual, is_leader=False
         )
         prev_follower_pos = new_follower_pos, new_follower_speed
         follower_accx = follower_data["acceleration x"]
         follower_accy = follower_data["acceleration y"]
-        follower_accy = follower_data["acceleration z"]
+        follower_accz = follower_data["acceleration z"]
 
         # Get preceding (leader) state for the follower
-        preceding_state, new_preceding_pos = get_preceding_state(
+        preceding_state, new_preceding_pos, preceding_raw_wheel_speeds = get_preceding_state(
             leader, dt_actual, prev_leader_state_pos
         )
         prev_leader_state_pos = new_preceding_pos
@@ -577,17 +606,26 @@ def main():
                 follower_right_angular,
             )
 
-        # Calculate time gap between leader and follower
+        # Calculate actual linear speeds from raw wheel speeds
+        leader_actual_linear_speed = (
+            angular_to_linear_velocity(leader_raw_wheel_speeds[0]) + 
+            angular_to_linear_velocity(leader_raw_wheel_speeds[1])
+        ) / 2
+        
+        follower_actual_linear_speed = (
+            angular_to_linear_velocity(follower_raw_wheel_speeds[0]) + 
+            angular_to_linear_velocity(follower_raw_wheel_speeds[1])
+        ) / 2
+
+        # Calculate time gap between leader and follower using actual speeds
         # Time gap (in seconds) = distance between robots (m) / follower speed (m/s)
-        if follower_data["speed"] != 0:
-            time_gap = (
-                leader_data["position"] - follower_data["position"]
-            ) / follower_data[
-                "speed"
-            ]  # Results in seconds
+        robot_distance = leader_data["position"] - follower_data["position"]
+        
+        if follower_actual_linear_speed > 0.01:  # Use a small threshold to avoid division by near-zero
+            time_gap = robot_distance / follower_actual_linear_speed  # Results in seconds
         else:
             time_gap = 9999999  # A large number (seconds) to indicate infinite time gap
-
+            
         # Calculate time gap error (in seconds)
         # Compare actual time gap with desired time gap (params["h"])
         time_gap_error = abs(time_gap - params["h"])  # Results in seconds
@@ -599,42 +637,59 @@ def main():
             "leader_connection": leader_connection,
             "follower_connection": follower_connection,
             "leader_position_m": leader_data["position"],
-            "leader_speed_mps": leader_data["speed"],
-            "leader_acceleration_mps2": leader_data["acceleration"],
-            "leader_command_mps": leader_command,
-            "leader_left_speed_radps": leader_left_angular,
-            "leader_right_speed_radps": leader_right_angular,
+            "leader_accelerationx_mps2": leader_accx,
+            "leader_accelerationy_mps2": leader_accy,
+            "leader_accelerationz_mps2": leader_accz,
+            "leader_command_mps": leader_command,  # Setpoint linear speed
+            "leader_actual_mps": leader_actual_linear_speed,  # Actual linear speed
+            "leader_left_setpoint_radps": leader_left_angular,  # Left wheel setpoint
+            "leader_right_setpoint_radps": leader_right_angular,  # Right wheel setpoint
+            "leader_left_actual_radps": leader_raw_wheel_speeds[0],  # Left wheel actual
+            "leader_right_actual_radps": leader_raw_wheel_speeds[1],  # Right wheel actual
             "follower_position_m": follower_data["position"],
-            "follower_speed_mps": follower_data["speed"],
-            "follower_acceleration_mps2": follower_data["acceleration"],
-            "follower_command_mps": follower_command,
-            "follower_left_speed_radps": follower_left_angular,
-            "follower_right_speed_radps": follower_right_angular,
+            "follower_accelerationx_mps2": follower_accx,
+            "follower_accelerationy_mps2": follower_accy,
+            "follower_accelerationz_mps2": follower_accz,
+            "follower_command_mps": follower_command,  # Setpoint linear speed
+            "follower_actual_mps": follower_actual_linear_speed,  # Actual linear speed
+            "follower_left_setpoint_radps": follower_left_angular,  # Left wheel setpoint
+            "follower_right_setpoint_radps": follower_right_angular,  # Right wheel setpoint
+            "follower_left_actual_radps": follower_raw_wheel_speeds[0],  # Left wheel actual
+            "follower_right_actual_radps": follower_raw_wheel_speeds[1],  # Right wheel actual
             "timegap_s": time_gap,
             "timegap_error_s": time_gap_error,
             "desired_timegap_s": params["h"],
+            "robot_distance_m": robot_distance,
         }
         experiment_data.append(data_point)
 
         # Optional: Print debug information
-        print(
-            f"[{current_time:5.2f}s] Leader command: {leader_command:.3f} | Follower command: {follower_command:.3f}"
-        )
         print("\033[2J\033[H", end="")  # Clear console
-        print(f"Frame dt: {dt_actual:.3f}s")
-        print(f"Leader Position: {new_leader_pos:.3f} m | Speed: {new_leader_speed:.3f} m/s")
-        print(f"Follower Position: {new_follower_pos:.3f} m | Speed: {new_follower_speed:.3f} m/s")
-        print(f"Gap: {leader_data['position'] - follower_data['position']:.3f} m | Time Gap: {time_gap:.2f} s")
+        print(f"Time: [{current_time:5.2f}s] | dt: {dt_actual:.3f}s")
+        print("--- Leader Robot ---")
+        print(f"Position: {new_leader_pos:.3f} m")
+        print(f"Speed (setpoint): {leader_command:.3f} m/s | Speed (actual): {leader_actual_linear_speed:.3f} m/s")
+        print(f"Left wheel: {leader_left_angular:.2f} vs {leader_raw_wheel_speeds[0]:.2f} rad/s | Right wheel: {leader_right_angular:.2f} vs {leader_raw_wheel_speeds[1]:.2f} rad/s")
+        
+        print("\n--- Follower Robot ---")
+        print(f"Position: {new_follower_pos:.3f} m")
+        print(f"Speed (setpoint): {follower_command:.3f} m/s | Speed (actual): {follower_actual_linear_speed:.3f} m/s")
+        print(f"Left wheel: {follower_left_angular:.2f} vs {follower_raw_wheel_speeds[0]:.2f} rad/s | Right wheel: {follower_right_angular:.2f} vs {follower_raw_wheel_speeds[1]:.2f} rad/s")
+        
+        print("\n--- Platooning Status ---")
+        print(f"Distance between robots: {robot_distance:.3f} m")
+        print(f"Time gap: {time_gap:.2f} s (desired: {params['h']:.2f} s, error: {time_gap_error:.2f} s)")
         
         if current_time < 1.0:  # Only print motor steps info during the first second
+            print("\n--- Debug Info ---")
             leader_steps = send_command(leader, leader.get_motors_steps)
             follower_steps = send_command(follower, follower.get_motors_steps)
             print(f"Leader Steps: {leader_steps}, Baseline: {LEADER_BASELINE_STEPS}")
             print(f"Follower Steps: {follower_steps}, Baseline: {FOLLOWER_BASELINE_STEPS}")
 
         # Enforce constant dt
-        loop_elapsed = time.time() - prev_time
-        sleep_time = follower_controller.nominal_dt - loop_elapsed
+        work_time = time.time() - loop_start
+        sleep_time = dt - work_time
         if sleep_time > 0:
             time.sleep(sleep_time)
 
