@@ -53,10 +53,12 @@ CLEANUP_TIMEOUT = 5.0  # seconds
 # Baselines for motor steps - will be initialized in main()
 LEADER_BASELINE_STEPS = (0, 0)
 FOLLOWER_BASELINE_STEPS = (0, 0)
+SECOND_FOLLOWER_BASELINE_STEPS = (0, 0)
 
 # Initial positions for the robots (in meters)
 LEADER_INITIAL_POSITION = 0.0     # Leader starts at position 0
 FOLLOWER_INITIAL_POSITION = -0.1  # Follower starts 10cm behind leader
+SECOND_FOLLOWER_INITIAL_POSITION = -0.2  # Second follower starts 10cm behind first follower
 
 def send_command(robot, command, *args, **kwargs):
     """Wrapper for sending commands to robot with go_on()"""
@@ -106,7 +108,7 @@ def check_connection(robot):
 
 
 # --- Helper functions to wrap sensor data from an Epuck instance ---
-def get_sensor_data(robot, prev_position, dt, is_leader=False):
+def get_sensor_data(robot, prev_position, dt, is_leader=False, is_second_follower=False):
     """
     Get the sensor data for the Epuck robot.
 
@@ -115,6 +117,7 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
     - prev_position: Previous position tuple (position, speed)
     - dt: Time step
     - is_leader: Boolean flag indicating if this is the leader robot
+    - is_second_follower: Boolean flag indicating if this is the second follower robot
 
     Returns:
     - dict: A dictionary containing position, speed, and acceleration
@@ -135,7 +138,6 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
         "raw_right_speed": 0, # rad/s
     }
 
-
     # Get the current motor steps (left, right)
     try:
         left_steps, right_steps = send_command(robot, robot.get_motors_steps)
@@ -146,8 +148,17 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
         print(f"Error getting motor steps: {e}")
         return empty_sensor_data, 0.0, 0.0, (0.0, 0.0)
 
-    # Apply baseline correction
-    baseline = LEADER_BASELINE_STEPS if is_leader else FOLLOWER_BASELINE_STEPS
+    # Apply baseline correction based on robot role
+    if is_leader:
+        baseline = LEADER_BASELINE_STEPS
+        initial_position = LEADER_INITIAL_POSITION
+    elif is_second_follower:
+        baseline = SECOND_FOLLOWER_BASELINE_STEPS
+        initial_position = SECOND_FOLLOWER_INITIAL_POSITION
+    else:
+        baseline = FOLLOWER_BASELINE_STEPS
+        initial_position = FOLLOWER_INITIAL_POSITION
+        
     corrected_left_steps = left_steps - baseline[0]
     corrected_right_steps = right_steps - baseline[1]
     
@@ -155,7 +166,6 @@ def get_sensor_data(robot, prev_position, dt, is_leader=False):
     step_distance = ((corrected_left_steps + corrected_right_steps) / 2 * STEPS_TO_METERS)
     
     # Apply the initial position offset
-    initial_position = LEADER_INITIAL_POSITION if is_leader else FOLLOWER_INITIAL_POSITION
     current_position = step_distance + initial_position
     
     # Get current speed from the robot
@@ -381,7 +391,6 @@ def linear_to_angular_velocity(linear_velocity):
 # --- Main Experiment Script ---
 def main():
     # Define physical parameters and control parameters
-    # TODO: Update these parameters based on Epuck specifications
     params = {
         "m": 0.130,  # mass (kg) -  VERIFIED
         "tau": 0.5,  # response lag (s) - needs verification
@@ -392,8 +401,9 @@ def main():
         "h": 2.0,  # desired time gap (s)
         "experiment_duration": 20.0,  # seconds
     }
-    # TODO: Tune these control parameters for Epuck
+    
     control_params = {
+        # Vehicle 1 (first follower) backstepping parameters
         "k11": 0.005,  # positive gain for stage 1
         "k12": 0.005,  # gain for sJtage 2 (q1 computation)
         "k13": 0.005,  # gain for stage 3 (final control)
@@ -401,10 +411,25 @@ def main():
         "epsilon12": 200.0,
         "epsilon13": 200.0,
         "delta0": 2.0,
-        # Leader PID gains (if used)
-        "leader_kp": 1.0,
-        "leader_ki": 0.1,
+        
+        # Vehicle 2 (second follower) backstepping parameters
+        "k21": 0.005,
+        "k211": 0.5,
+        "k22": 0.005,
+        "k23": 0.005,
+        "epsilon22": 200.0,
+        "epsilon23": 200.0,
+        
+        # PID parameters for all robots
+        "leader_kp": 0.5,
+        "leader_ki": 0.05,
         "leader_kd": 0.05,
+        "follower_kp": 0.5,
+        "follower_ki": 0.05,
+        "follower_kd": 0.05,
+        "second_follower_kp": 0.5,
+        "second_follower_ki": 0.05,
+        "second_follower_kd": 0.05,
     }
     dt = 0.3  # control loop period (s); adjust as needed
 
@@ -423,17 +448,20 @@ def main():
     # Initialize Epuck Robot Set 1
     leader_ip = "192.168.0.158"  # EPUCK-5474
     follower_ip = "192.168.0.51"  # EPUCK-5431
+    second_follower_ip = "192.168.0.29"  # EPUCK-5517 - Add second follower IP
 
-    # Initialize Epuck Robot Set 2
     # leader_ip = "192.168.0.29" # EPUCK-5517
     # follower_ip = "192.168.0.191" # EPUCK-5515
 
-    leader = wrapper.get_robot(leader_ip)  # Gets a WifiEpuck
+    # Initialize robots
+    leader = wrapper.get_robot(leader_ip)
     follower = wrapper.get_robot(follower_ip)
+    second_follower = wrapper.get_robot(second_follower_ip)  # Initialize second follower
 
-    # Initialize sensors
+    # Initialize sensors for all robots
     leader.init_sensors()
     follower.init_sensors()
+    second_follower.init_sensors()  # Initialize second follower sensors
 
     # Get initial motor step values to establish a baseline
     print("Initializing motor step baselines...")
@@ -467,25 +495,46 @@ def main():
             print(f"Error getting follower baseline: {e}")
         time.sleep(0.2)
 
+    # Get baseline steps for second follower
+    second_follower_baseline_steps = None
+    for _ in range(5):
+        try:
+            second_follower_steps = send_command(second_follower, second_follower.get_motors_steps)
+            if second_follower_steps is not None and None not in second_follower_steps:
+                second_follower_baseline_steps = second_follower_steps
+                break
+        except Exception as e:
+            print(f"Error getting second follower baseline: {e}")
+        time.sleep(0.2)
+
     if follower_baseline_steps is None:
         print("WARNING: Could not get follower baseline steps, using (0,0)")
         follower_baseline_steps = (0, 0)
+    if second_follower_baseline_steps is None:
+        print("WARNING: Could not get second follower baseline steps, using (0,0)")
+        second_follower_baseline_steps = (0, 0)
 
     print(
-        f"Baselines established - Leader: {leader_baseline_steps}, Follower: {follower_baseline_steps}"
+        f"Baselines established - Leader: {leader_baseline_steps}, "
+        f"Follower: {follower_baseline_steps}, "
+        f"Second Follower: {second_follower_baseline_steps}"
     )
 
-    # Store baselines in a global variable to access from sensor functions
-    global LEADER_BASELINE_STEPS, FOLLOWER_BASELINE_STEPS
+    # Store baselines in global variables
+    global LEADER_BASELINE_STEPS, FOLLOWER_BASELINE_STEPS, SECOND_FOLLOWER_BASELINE_STEPS
     LEADER_BASELINE_STEPS = leader_baseline_steps
     FOLLOWER_BASELINE_STEPS = follower_baseline_steps
+    SECOND_FOLLOWER_BASELINE_STEPS = second_follower_baseline_steps
 
-    # Create ExperimentController instances
+    # Create ExperimentController instances for all robots
     leader_controller = ExperimentController(
         role="leader", params=params, control_params=control_params, dt=dt
     )
     follower_controller = ExperimentController(
         role="follower", params=params, control_params=control_params, dt=dt
+    )
+    second_follower_controller = ExperimentController(
+        role="second_follower", params=params, control_params=control_params, dt=dt
     )
 
     # Enable LED to identify leader
@@ -494,6 +543,7 @@ def main():
     # Variables to store previous positions for finite-difference speed estimation
     prev_leader_pos = LEADER_INITIAL_POSITION, 0  # Initial position and zero speed
     prev_follower_pos = FOLLOWER_INITIAL_POSITION, 0  # Initial position and zero speed
+    prev_second_follower_pos = SECOND_FOLLOWER_INITIAL_POSITION, 0  # Initial position and zero speed
 
     prev_leader_state_pos = None  # for preceding state in follower
 
@@ -506,186 +556,284 @@ def main():
         dt_actual = loop_start - prev_loop_start
         prev_loop_start = loop_start
         current_time = time.time() - start_time
-        # dt_actual = time.time() - prev_time
-        # prev_time = time.time()
 
-        # Check connections
+        # Check connections for all robots first
         leader_connection = check_connection(leader)
         follower_connection = check_connection(follower)
+        second_follower_connection = check_connection(second_follower)
 
-        # --- Leader Control ---
-        # Get leader sensor data
-        leader_data, new_leader_pos, new_leader_speed, leader_raw_wheel_speeds = get_sensor_data(
-            leader, prev_leader_pos, dt_actual, is_leader=True
-        )
-        prev_leader_pos = new_leader_pos, new_leader_speed
-        leader_accx = leader_data["acceleration x"]
-        leader_accy = leader_data["acceleration y"]
-        leader_accz = leader_data["acceleration z"]
-
-        # Compute control command for leader
-        leader_command = leader_controller.compute_command(
-            leader_data, current_time, dt_actual
-        )
-
-        # Convert leader command (linear speed in m/s) to bounded angular velocity (rad/s)
-        leader_linear_speed = np.clip(
-            leader_command, -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED
-        )
-        leader_angular_speed = linear_to_angular_velocity(leader_linear_speed)
-        leader_angular_speed = np.clip(
-            leader_angular_speed, -MAX_ANGULAR_SPEED, MAX_ANGULAR_SPEED
-        )
-
-        # Pass leader command and proximity data to the orientation control function
-        prox = send_command(leader, leader.get_prox) if leader_connection else [0] * 8
-
-        # Keep left and right speeds equal for the leader (no orientation control yet)
-        leader_left_angular = leader_angular_speed
-        leader_right_angular = leader_angular_speed
-
-        # Send angular speed commands to the leader robot
-        if leader_connection:
-            send_command(
-                leader, leader.set_speed, leader_left_angular, leader_right_angular
-            )
-
-        # --- Follower Control ---
-        # Get follower sensor data
-        follower_data, new_follower_pos, new_follower_speed, follower_raw_wheel_speeds = get_sensor_data(
-            follower, prev_follower_pos, dt_actual, is_leader=False
-        )
-        prev_follower_pos = new_follower_pos, new_follower_speed
-        follower_accx = follower_data["acceleration x"]
-        follower_accy = follower_data["acceleration y"]
-        follower_accz = follower_data["acceleration z"]
-
-        # Get preceding (leader) state for the follower
-        preceding_state, new_preceding_pos, preceding_raw_wheel_speeds = get_preceding_state(
-            leader, dt_actual, prev_leader_state_pos
-        )
-        prev_leader_state_pos = new_preceding_pos
-
-        # Compute control command for follower
-        follower_command = follower_controller.compute_command(
-            follower_data, current_time, preceding_state, dt_actual
-        )
-        # Convert follower command (linear speed in m/s) to bounded angular velocity (rad/s)
-        follower_linear_speed = np.clip(
-            follower_command, -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED
-        )
-
-        # Pass follower command (linear speed) and proximity data to the orientation control function
-        prox = (
-            send_command(follower, follower.get_prox)
-            if follower_connection
-            else [0] * 8
-        )
-        # follower_left_linear, follower_right_linear = orientation_control(prox, follower_linear_speed)
-
-        # TODO: Remove this once orientation control is implemented
-        follower_left_linear = follower_linear_speed
-        follower_right_linear = follower_linear_speed
-
-        # Convert linear speeds to angular speeds and clamp to Epuck limits
-        follower_left_angular = linear_to_angular_velocity(follower_left_linear)
-        follower_right_angular = linear_to_angular_velocity(follower_right_linear)
-        follower_left_angular = np.clip(
-            follower_left_angular, -MAX_ANGULAR_SPEED, MAX_ANGULAR_SPEED
-        )
-        follower_right_angular = np.clip(
-            follower_right_angular, -MAX_ANGULAR_SPEED, MAX_ANGULAR_SPEED
-        )
-
-        # Send angular speed commands to the follower robot
-        if follower_connection:
-            send_command(
-                follower,
-                follower.set_speed,
-                follower_left_angular,
-                follower_right_angular,
-            )
-
-        # Calculate actual linear speeds from raw wheel speeds
-        leader_actual_linear_speed = (
-            angular_to_linear_velocity(leader_raw_wheel_speeds[0]) + 
-            angular_to_linear_velocity(leader_raw_wheel_speeds[1])
-        ) / 2
-        
-        follower_actual_linear_speed = (
-            angular_to_linear_velocity(follower_raw_wheel_speeds[0]) + 
-            angular_to_linear_velocity(follower_raw_wheel_speeds[1])
-        ) / 2
-
-        # Calculate time gap between leader and follower using actual speeds
-        # Time gap (in seconds) = distance between robots (m) / follower speed (m/s)
-        robot_distance = leader_data["position"] - follower_data["position"]
-        
-        if follower_actual_linear_speed > 0.01:  # Use a small threshold to avoid division by near-zero
-            time_gap = robot_distance / follower_actual_linear_speed  # Results in seconds
-        else:
-            time_gap = 9999999  # A large number (seconds) to indicate infinite time gap
-            
-        # Calculate time gap error (in seconds)
-        # Compare actual time gap with desired time gap (params["h"])
-        time_gap_error = abs(time_gap - params["h"])  # Results in seconds
-
-        # Collect data for this timestep
+        # Initialize data point with all possible keys set to None or 0.0
         data_point = {
+            # Basic timing and connection info
             "timestamp_s": current_time,
             "dt_s": dt_actual,
+            "desired_timegap_s": params["h"],
             "leader_connection": leader_connection,
             "follower_connection": follower_connection,
-            "leader_position_m": leader_data["position"],
-            "leader_accelerationx_mps2": leader_accx,
-            "leader_accelerationy_mps2": leader_accy,
-            "leader_accelerationz_mps2": leader_accz,
-            "leader_command_mps": leader_command,  # Setpoint linear speed
-            "leader_actual_mps": leader_actual_linear_speed,  # Actual linear speed
-            "leader_left_setpoint_radps": leader_left_angular,  # Left wheel setpoint
-            "leader_right_setpoint_radps": leader_right_angular,  # Right wheel setpoint
-            "leader_left_actual_radps": leader_raw_wheel_speeds[0],  # Left wheel actual
-            "leader_right_actual_radps": leader_raw_wheel_speeds[1],  # Right wheel actual
-            "follower_position_m": follower_data["position"],
-            "follower_accelerationx_mps2": follower_accx,
-            "follower_accelerationy_mps2": follower_accy,
-            "follower_accelerationz_mps2": follower_accz,
-            "follower_command_mps": follower_command,  # Setpoint linear speed
-            "follower_actual_mps": follower_actual_linear_speed,  # Actual linear speed
-            "follower_left_setpoint_radps": follower_left_angular,  # Left wheel setpoint
-            "follower_right_setpoint_radps": follower_right_angular,  # Right wheel setpoint
-            "follower_left_actual_radps": follower_raw_wheel_speeds[0],  # Left wheel actual
-            "follower_right_actual_radps": follower_raw_wheel_speeds[1],  # Right wheel actual
-            "timegap_s": time_gap,
-            "timegap_error_s": time_gap_error,
-            "desired_timegap_s": params["h"],
-            "robot_distance_m": robot_distance,
+            "second_follower_connection": second_follower_connection,
+            
+            # Leader data fields
+            "leader_position_m": 0.0,
+            "leader_accelerationx_mps2": 0.0,
+            "leader_accelerationy_mps2": 0.0,
+            "leader_accelerationz_mps2": 0.0,
+            "leader_command_mps": 0.0,
+            "leader_actual_mps": 0.0,
+            "leader_left_setpoint_radps": 0.0,
+            "leader_right_setpoint_radps": 0.0,
+            "leader_left_actual_radps": 0.0,
+            "leader_right_actual_radps": 0.0,
+            
+            # First follower data fields
+            "follower_position_m": 0.0,
+            "follower_accelerationx_mps2": 0.0,
+            "follower_accelerationy_mps2": 0.0,
+            "follower_accelerationz_mps2": 0.0,
+            "follower_command_mps": 0.0,
+            "follower_actual_mps": 0.0,
+            "follower_left_setpoint_radps": 0.0,
+            "follower_right_setpoint_radps": 0.0,
+            "follower_left_actual_radps": 0.0,
+            "follower_right_actual_radps": 0.0,
+            
+            # Second follower data fields
+            "second_follower_position_m": 0.0,
+            "second_follower_accelerationx_mps2": 0.0,
+            "second_follower_accelerationy_mps2": 0.0,
+            "second_follower_accelerationz_mps2": 0.0,
+            "second_follower_command_mps": 0.0,
+            "second_follower_actual_mps": 0.0,
+            "second_follower_left_setpoint_radps": 0.0,
+            "second_follower_right_setpoint_radps": 0.0,
+            "second_follower_left_actual_radps": 0.0,
+            "second_follower_right_actual_radps": 0.0,
+            
+            # Platooning metrics
+            "leader_follower_distance_m": 0.0,
+            "leader_follower_timegap_s": 0.0,
+            "leader_follower_timegap_error_s": 0.0,
+            "follower_second_follower_distance_m": 0.0,
+            "follower_second_follower_timegap_s": 0.0,
+            "follower_second_follower_timegap_error_s": 0.0
         }
-        experiment_data.append(data_point)
 
-        # Optional: Print debug information
-        print("\033[2J\033[H", end="")  # Clear console
-        print(f"Time: [{current_time:5.2f}s] | dt: {dt_actual:.3f}s")
-        print("--- Leader Robot ---")
-        print(f"Position: {new_leader_pos:.3f} m")
-        print(f"Speed (setpoint): {leader_command:.3f} m/s | Speed (actual): {leader_actual_linear_speed:.3f} m/s")
-        print(f"Left wheel: {leader_left_angular:.2f} vs {leader_raw_wheel_speeds[0]:.2f} rad/s | Right wheel: {leader_right_angular:.2f} vs {leader_raw_wheel_speeds[1]:.2f} rad/s")
-        
-        print("\n--- Follower Robot ---")
-        print(f"Position: {new_follower_pos:.3f} m")
-        print(f"Speed (setpoint): {follower_command:.3f} m/s | Speed (actual): {follower_actual_linear_speed:.3f} m/s")
-        print(f"Left wheel: {follower_left_angular:.2f} vs {follower_raw_wheel_speeds[0]:.2f} rad/s | Right wheel: {follower_right_angular:.2f} vs {follower_raw_wheel_speeds[1]:.2f} rad/s")
-        
-        print("\n--- Platooning Status ---")
-        print(f"Distance between robots: {robot_distance:.3f} m")
-        print(f"Time gap: {time_gap:.2f} s (desired: {params['h']:.2f} s, error: {time_gap_error:.2f} s)")
-        
-        if current_time < 1.0:  # Only print motor steps info during the first second
-            print("\n--- Debug Info ---")
-            leader_steps = send_command(leader, leader.get_motors_steps)
-            follower_steps = send_command(follower, follower.get_motors_steps)
-            print(f"Leader Steps: {leader_steps}, Baseline: {LEADER_BASELINE_STEPS}")
-            print(f"Follower Steps: {follower_steps}, Baseline: {FOLLOWER_BASELINE_STEPS}")
+        try:
+            # --- Leader Control ---
+            leader_data, new_leader_pos, new_leader_speed, leader_raw_wheel_speeds = get_sensor_data(
+                leader, prev_leader_pos, dt_actual, is_leader=True, is_second_follower=False
+            )
+            prev_leader_pos = new_leader_pos, new_leader_speed
+            
+            # Update data point with leader data
+            data_point.update({
+                "leader_position_m": leader_data["position"],
+                "leader_accelerationx_mps2": leader_data["acceleration x"],
+                "leader_accelerationy_mps2": leader_data["acceleration y"],
+                "leader_accelerationz_mps2": leader_data["acceleration z"],
+            })
+
+            if leader_connection:
+                # Compute and apply leader control
+                leader_command = leader_controller.compute_command(
+                    leader_data, current_time, dt_actual=dt_actual
+                )
+                
+                leader_linear_speed = np.clip(leader_command, -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
+                leader_angular_speed = linear_to_angular_velocity(leader_linear_speed)
+                leader_left_angular = leader_angular_speed
+                leader_right_angular = leader_angular_speed
+                
+                send_command(leader, leader.set_speed, leader_left_angular, leader_right_angular)
+                
+                # Update data point with leader control data
+                data_point.update({
+                    "leader_command_mps": leader_command,
+                    "leader_actual_mps": (angular_to_linear_velocity(leader_raw_wheel_speeds[0]) + 
+                                        angular_to_linear_velocity(leader_raw_wheel_speeds[1])) / 2,
+                    "leader_left_setpoint_radps": leader_left_angular,
+                    "leader_right_setpoint_radps": leader_right_angular,
+                    "leader_left_actual_radps": leader_raw_wheel_speeds[0],
+                    "leader_right_actual_radps": leader_raw_wheel_speeds[1],
+                })
+            
+            # --- First Follower Control ---
+            follower_data, new_follower_pos, new_follower_speed, follower_raw_wheel_speeds = get_sensor_data(
+                follower, prev_follower_pos, dt_actual, is_leader=False, is_second_follower=False
+            )
+            prev_follower_pos = new_follower_pos, new_follower_speed
+            
+            # Get preceding (leader) state for the follower
+            preceding_state, new_preceding_pos, preceding_raw_wheel_speeds = get_preceding_state(
+                leader, dt_actual, prev_leader_state_pos
+            )
+            prev_leader_state_pos = new_preceding_pos
+            
+            # Update data point with follower data
+            data_point.update({
+                "follower_position_m": follower_data["position"],
+                "follower_accelerationx_mps2": follower_data["acceleration x"],
+                "follower_accelerationy_mps2": follower_data["acceleration y"],
+                "follower_accelerationz_mps2": follower_data["acceleration z"],
+            })
+
+            if follower_connection:
+                # Compute and apply follower control
+                follower_command = follower_controller.compute_command(
+                    follower_data, current_time, leader_state, dt_actual=dt_actual
+                )
+                
+                follower_linear_speed = np.clip(follower_command, -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
+                follower_left_angular = linear_to_angular_velocity(follower_linear_speed)
+                follower_right_angular = follower_left_angular
+                
+                send_command(follower, follower.set_speed, follower_left_angular, follower_right_angular)
+                
+                # Calculate time gap between leader and follower
+                follower_actual_linear_speed = (angular_to_linear_velocity(follower_raw_wheel_speeds[0]) + 
+                                              angular_to_linear_velocity(follower_raw_wheel_speeds[1])) / 2
+                leader_follower_distance = leader_data["position"] - follower_data["position"]
+                
+                if follower_actual_linear_speed > 0.001:
+                    leader_follower_time_gap = leader_follower_distance / follower_actual_linear_speed
+                else:
+                    leader_follower_time_gap = 9999999.0
+                
+                # Update data point with follower control data
+                data_point.update({
+                    "follower_command_mps": follower_command,
+                    "follower_actual_mps": follower_actual_linear_speed,
+                    "follower_left_setpoint_radps": follower_left_angular,
+                    "follower_right_setpoint_radps": follower_right_angular,
+                    "follower_left_actual_radps": follower_raw_wheel_speeds[0],
+                    "follower_right_actual_radps": follower_raw_wheel_speeds[1],
+                    "leader_follower_timegap_s": leader_follower_time_gap,
+                    "leader_follower_timegap_error_s": abs(leader_follower_time_gap - params["h"]),
+                    "leader_follower_distance_m": leader_follower_distance,
+                })
+            
+            # --- Second Follower Control ---
+            second_follower_data, new_second_follower_pos, new_second_follower_speed, second_follower_raw_wheel_speeds = get_sensor_data(
+                second_follower, prev_second_follower_pos, dt_actual, is_leader=False, is_second_follower=True
+            )
+            prev_second_follower_pos = new_second_follower_pos, new_second_follower_speed
+            
+            # Get preceding (follower) state for the second follower
+            follower_state, follower_preceding_pos, follower_preceding_wheel_speeds = get_preceding_state(
+                follower, dt_actual, prev_follower_pos
+            )
+            
+            # Update data point with second follower data
+            data_point.update({
+                "second_follower_position_m": second_follower_data["position"],
+                "second_follower_accelerationx_mps2": second_follower_data["acceleration x"],
+                "second_follower_accelerationy_mps2": second_follower_data["acceleration y"],
+                "second_follower_accelerationz_mps2": second_follower_data["acceleration z"],
+            })
+
+            if second_follower_connection:
+                # Compute and apply second follower control
+                second_follower_command = second_follower_controller.compute_command(
+                    second_follower_data,
+                    current_time,
+                    follower_state,       # first follower state (preceding vehicle)
+                    leader_state,         # leader state
+                    dt_actual=dt_actual
+                )
+                
+                second_follower_linear_speed = np.clip(second_follower_command, -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
+                second_follower_left_angular = linear_to_angular_velocity(second_follower_linear_speed)
+                second_follower_right_angular = second_follower_left_angular
+                
+                send_command(second_follower, second_follower.set_speed, 
+                           second_follower_left_angular, second_follower_right_angular)
+                
+                # Calculate time gap between follower and second follower
+                second_follower_actual_linear_speed = (angular_to_linear_velocity(second_follower_raw_wheel_speeds[0]) + 
+                                                     angular_to_linear_velocity(second_follower_raw_wheel_speeds[1])) / 2
+                follower_second_follower_distance = follower_data["position"] - second_follower_data["position"]
+                
+                if second_follower_actual_linear_speed > 0.001:
+                    follower_second_follower_time_gap = follower_second_follower_distance / second_follower_actual_linear_speed
+                else:
+                    follower_second_follower_time_gap = 9999999.0
+                
+                # Update data point with second follower control data
+                data_point.update({
+                    "second_follower_command_mps": second_follower_command,
+                    "second_follower_actual_mps": second_follower_actual_linear_speed,
+                    "second_follower_left_setpoint_radps": second_follower_left_angular,
+                    "second_follower_right_setpoint_radps": second_follower_right_angular,
+                    "second_follower_left_actual_radps": second_follower_raw_wheel_speeds[0],
+                    "second_follower_right_actual_radps": second_follower_raw_wheel_speeds[1],
+                    "follower_second_follower_timegap_s": follower_second_follower_time_gap,
+                    "follower_second_follower_timegap_error_s": abs(follower_second_follower_time_gap - params["h"]),
+                    "follower_second_follower_distance_m": follower_second_follower_distance,
+                })
+
+        except Exception as e:
+            print(f"Error in control loop: {str(e)}")
+        finally:
+            # Always collect data
+            experiment_data.append(data_point)
+
+            # Print debug information - using safe dictionary access with .get()
+            print("\033[2J\033[H", end="")  # Clear console
+            print(f"Time: [{current_time:5.2f}s] | dt: {dt_actual:.3f}s")
+            
+            print("--- Leader Robot ---")
+            print(f"Position: {data_point.get('leader_position_m', 0.0):.3f} m")
+            if leader_connection:
+                print(f"Speed (setpoint): {data_point.get('leader_command_mps', 0.0):.3f} m/s | " 
+                     f"Speed (actual): {data_point.get('leader_actual_mps', 0.0):.3f} m/s")
+                print(f"Left wheel: {data_point.get('leader_left_setpoint_radps', 0.0):.2f} vs "
+                     f"{data_point.get('leader_left_actual_radps', 0.0):.2f} rad/s | "
+                     f"Right wheel: {data_point.get('leader_right_setpoint_radps', 0.0):.2f} vs "
+                     f"{data_point.get('leader_right_actual_radps', 0.0):.2f} rad/s")
+            else:
+                print("Not connected")
+            
+            print("\n--- First Follower Robot ---")
+            print(f"Position: {data_point.get('follower_position_m', 0.0):.3f} m")
+            if follower_connection:
+                print(f"Speed (setpoint): {data_point.get('follower_command_mps', 0.0):.3f} m/s | "
+                     f"Speed (actual): {data_point.get('follower_actual_mps', 0.0):.3f} m/s")
+                print(f"Left wheel: {data_point.get('follower_left_setpoint_radps', 0.0):.2f} vs "
+                     f"{data_point.get('follower_left_actual_radps', 0.0):.2f} rad/s | "
+                     f"Right wheel: {data_point.get('follower_right_setpoint_radps', 0.0):.2f} vs "
+                     f"{data_point.get('follower_right_actual_radps', 0.0):.2f} rad/s")
+            else:
+                print("Not connected")
+            
+            print("\n--- Second Follower Robot ---")
+            print(f"Position: {data_point.get('second_follower_position_m', 0.0):.3f} m")
+            if second_follower_connection:
+                print(f"Speed (setpoint): {data_point.get('second_follower_command_mps', 0.0):.3f} m/s | "
+                     f"Speed (actual): {data_point.get('second_follower_actual_mps', 0.0):.3f} m/s")
+                print(f"Left wheel: {data_point.get('second_follower_left_setpoint_radps', 0.0):.2f} vs "
+                     f"{data_point.get('second_follower_left_actual_radps', 0.0):.2f} rad/s | "
+                     f"Right wheel: {data_point.get('second_follower_right_setpoint_radps', 0.0):.2f} vs "
+                     f"{data_point.get('second_follower_right_actual_radps', 0.0):.2f} rad/s")
+            else:
+                print("Not connected")
+            
+            print("\n--- Platooning Status ---")
+            if follower_connection:
+                print(f"Leader-Follower: Distance: {data_point.get('leader_follower_distance_m', 0.0):.3f} m | "
+                     f"Time gap: {data_point.get('leader_follower_timegap_s', 0.0):.2f} s (desired: {params['h']:.2f}s, "
+                     f"error: {data_point.get('leader_follower_timegap_error_s', 0.0):.2f}s)")
+            if second_follower_connection:
+                print(f"Follower-Second Follower: Distance: {data_point.get('follower_second_follower_distance_m', 0.0):.3f} m | "
+                     f"Time gap: {data_point.get('follower_second_follower_timegap_s', 0.0):.2f} s (desired: {params['h']:.2f}s, "
+                     f"error: {data_point.get('follower_second_follower_timegap_error_s', 0.0):.2f}s)")
+            
+            if current_time < 1.0:  # Only print motor steps info during the first second
+                print("\n--- Debug Info ---")
+                leader_steps = send_command(leader, leader.get_motors_steps)
+                follower_steps = send_command(follower, follower.get_motors_steps)
+                second_follower_steps = send_command(second_follower, second_follower.get_motors_steps)
+                print(f"Leader Steps: {leader_steps}, Baseline: {LEADER_BASELINE_STEPS}")
+                print(f"Follower Steps: {follower_steps}, Baseline: {FOLLOWER_BASELINE_STEPS}")
+                print(f"Second Follower Steps: {second_follower_steps}, Baseline: {SECOND_FOLLOWER_BASELINE_STEPS}")
 
         # Enforce constant dt
         work_time = time.time() - loop_start
@@ -700,6 +848,8 @@ def main():
             send_command(leader, leader.set_speed, 0, 0)
         if check_connection(follower):
             send_command(follower, follower.set_speed, 0, 0)
+        if check_connection(second_follower):
+            send_command(second_follower, second_follower.set_speed, 0, 0)
     except Exception as e:
         print(f"Error stopping robots: {str(e)}")
 
@@ -709,16 +859,21 @@ def main():
     print("Starting cleanup process...")
     lead_success = False
     follow_success = False
+    second_follow_success = False
     try:
         if check_connection(leader):
             lead_success = robust_cleanup(leader)
         if check_connection(follower):
             follow_success = robust_cleanup(follower)
+        if check_connection(second_follower):
+            second_follow_success = robust_cleanup(second_follower)
     except Exception as e:
         print(f"Error during cleanup: {str(e)}")
     finally:
         print(
-            f"Cleanup process completed. Leader Success: {lead_success}, Follower Success: {follow_success}"
+            f"Cleanup process completed. Leader Success: {lead_success}, "
+            f"Follower Success: {follow_success}, "
+            f"Second Follower Success: {second_follow_success}"
         )
         # Save experiment data to CSV
         print("Saving experiment data...")

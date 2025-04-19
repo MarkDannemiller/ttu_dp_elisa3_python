@@ -18,7 +18,7 @@ class ExperimentController:
         Initializes the ExperimentController.
 
         Parameters:
-          role           : A string, either 'leader' or 'follower'
+          role           : A string, either 'leader' or 'follower' or 'second_follower'
           params         : Dictionary of physical parameters:
                            { 'm': mass,
                              'tau': response lag time,
@@ -32,7 +32,11 @@ class ExperimentController:
                            { 'k11': ..., 'k12': ..., 'k13': ...,
                              'epsilon11': ..., 'epsilon12': ..., 'epsilon13': ...,
                              'delta0': ...,
-                             'leader_kp': ..., 'leader_ki': ..., 'leader_kd': ... }
+                             'leader_kp': ..., 'leader_ki': ..., 'leader_kd': ...,
+                             'k21': ..., 'k211': ..., 'k22': ..., 'k23': ...,
+                             'epsilon22': ..., 'epsilon23': ...,
+                             'follower_kp': ..., 'follower_ki': ..., 'follower_kd': ...,
+                             'second_follower_kp': ..., 'second_follower_ki': ..., 'second_follower_kd': ... }
           dt             : Control loop period (s)
         """
         self.role = role.lower()
@@ -168,10 +172,7 @@ class ExperimentController:
         )
         # Integrate the acceleration command to update desired speed:
         self.desired_speed += a_command * dt_actual
-        # Optionally, clamp the desired speed to a valid range:
-        v_min, v_max = 0.0, 0.3  # for instance, for a palm-sized robot
-        self.desired_speed = max(v_min, min(v_max, self.desired_speed))
-
+        
         # Now run a low-level PID speed controller:
         error = self.desired_speed - sensor_data["speed"]
         self.pid_integral += error * dt_actual
@@ -188,28 +189,118 @@ class ExperimentController:
 
         return motor_command
 
-    def compute_command(self, sensor_data, t, preceding_state=None, dt_actual=None):
+    def compute_second_follower_command(self, sensor_data, preceding_state, leader_state, dt_actual):
+        """
+        For the second follower, we use the vehicle2_controller from the simulation
+        which requires coupling information from both the leader and first follower.
+        
+        sensor_data: Dictionary with keys 'position', 'speed', 'acceleration'
+        preceding_state: Dictionary for the first follower robot
+        leader_state: Dictionary for the leader robot
+        """
+        h = self.params["h"]
+        
+        # Compute vehicle 2 errors
+        e_x2 = preceding_state["position"] - sensor_data["position"] - h * sensor_data["speed"]
+        e_v2 = preceding_state["speed"] - sensor_data["speed"]
+        
+        # Compute the z coordinates for the second follower
+        z2_1 = e_x2 - h * e_v2
+        
+        # Get leader and first follower data for computing coupling
+        x1 = preceding_state["position"]  # First follower position
+        v1 = preceding_state["speed"]     # First follower speed
+        a1 = preceding_state["acceleration"]  # First follower acceleration
+        
+        # Compute the z2_2 coordinate (similar to the simulation)
+        k21 = self.control_params["k21"]
+        z2_2 = e_v2 - (h * a1 - k21 * z2_1)
+        
+        # Calculate coupling terms from vehicle 1 (first follower)
+        # Get first follower error coordinates
+        e_x1 = leader_state["position"] - x1 - h * v1
+        e_v1 = leader_state["speed"] - v1
+        z1_1 = e_x1 - h * e_v1
+        
+        p1 = self.control_params["k11"] + h * self.control_params["delta0"] / (2 * self.control_params["epsilon11"])
+        q1 = self.control_params["k12"] + abs(1 - self.control_params["k11"] * h - 
+                                          (h**2 * self.control_params["delta0"]) / 
+                                          (2 * self.control_params["epsilon11"])) * \
+                                          (self.control_params["delta0"] / (2 * self.control_params["epsilon12"]))
+        z1_2 = e_v1 + p1 * z1_1
+        z1_3 = a1 - (z1_1 + p1 * e_v1 + q1 * z1_2)
+        
+        # Coupling terms from simulation
+        K1 = np.array([1 - p1**2, p1 + q1, 1.0])
+        coupling_term = np.dot(K1, np.array([z1_1, z1_2, z1_3]))
+        B1 = np.array([-h, 1 - p1 * h, h + p1 * q1 - p1])
+        coupling_B = np.linalg.norm(B1)
+        
+        # Calculate P2 for z2_3
+        P2 = self.control_params["k22"] + (h * self.control_params["delta0"]) / \
+             (2 * self.control_params["epsilon22"]) * abs(coupling_B)
+        
+        # Compute final z2_3 coordinate
+        k211 = self.control_params["k211"]
+        z2_3 = sensor_data["acceleration"] - ((1 - k211) * z2_1 + (k21 + P2) * z2_2 + coupling_term)
+        
+        # Call the vehicle2_controller
+        a_command = vehicle2_controller(
+            sensor_data["speed"], sensor_data["acceleration"],
+            z2_1, z2_2, z2_3,
+            coupling_term, coupling_B,
+            h, self.control_params["delta0"],
+            self.params["m"], self.params["tau"], self.params["Af"],
+            self.params["air_density"], self.params["Cd"], self.params["Cr"],
+            self.control_params["k21"], self.control_params["k211"],
+            self.control_params["k22"], self.control_params["k23"],
+            self.control_params["epsilon22"], self.control_params["epsilon23"]
+        )
+        
+        # Integrate the acceleration command to update desired speed
+        self.desired_speed += a_command * dt_actual
+        
+        # Low-level PID speed controller
+        error = self.desired_speed - sensor_data["speed"]
+        self.pid_integral += error * dt_actual
+        derivative = (error - self.pid_prev_error) / dt_actual if dt_actual > 0 else 0.0
+        self.pid_prev_error = error
+        
+        # Use second follower-specific PID gains
+        kp = self.control_params.get("second_follower_kp", 1.0)
+        ki = self.control_params.get("second_follower_ki", 0.1)
+        kd = self.control_params.get("second_follower_kd", 0.05)
+        motor_command = kp * error + ki * self.pid_integral + kd * derivative
+        
+        return motor_command
+
+    def compute_command(self, sensor_data, t, preceding_state=None, leader_state=None, dt_actual=None):
         """
         Computes the control command based on the role.
-
+        
         Inputs:
           sensor_data    : Dictionary with keys 'position', 'speed', 'acceleration'
           t              : Current time (s)
-          preceding_state: (Optional) Dictionary for follower robots.
-
+          preceding_state: (Optional) Dictionary for follower robots
+          leader_state   : (Optional) Dictionary for second follower robot
+          dt_actual      : Actual elapsed time since last control cycle
+        
         Returns:
-          command        : The computed control output.
+          command        : The computed control output
         """
         if dt_actual is None:
             dt_actual = self.nominal_dt  # fallback to nominal dt
+        
         if self.role == "leader":
             return self.compute_leader_command(sensor_data, t, dt_actual)
         elif self.role == "follower":
             if preceding_state is None:
                 raise ValueError("Follower mode requires preceding_state input.")
-            return self.compute_follower_command(
-                sensor_data, preceding_state, dt_actual
-            )
+            return self.compute_follower_command(sensor_data, preceding_state, dt_actual)
+        elif self.role == "second_follower":
+            if preceding_state is None or leader_state is None:
+                raise ValueError("Second follower mode requires both preceding_state and leader_state inputs.")
+            return self.compute_second_follower_command(sensor_data, preceding_state, leader_state, dt_actual)
         else:
             raise ValueError("Invalid role specified.")
 
@@ -238,6 +329,18 @@ if __name__ == "__main__":
         "leader_kp": 1.0,
         "leader_ki": 0.1,
         "leader_kd": 0.05,
+        "k21": 0.005,
+        "k211": 0.5,
+        "k22": 0.005,
+        "k23": 0.005,
+        "epsilon22": 200.0,
+        "epsilon23": 200.0,
+        "follower_kp": 0.5,
+        "follower_ki": 0.05,
+        "follower_kd": 0.05,
+        "second_follower_kp": 0.5,
+        "second_follower_ki": 0.05,
+        "second_follower_kd": 0.05,
     }
 
     # Create an instance for a follower robot (for a leader, omit preceding_state)
