@@ -1,179 +1,189 @@
-# Updated Graphing.py with corrected column names
-
 #!/usr/bin/env python3
-"""
-ePuck CSV Data Plotter (VS Code–friendly)
-
-Configure `csv_file` below and comment/uncomment the plot calls
-you need. Includes leader vs follower comparisons for speed,
-position, and acceleration magnitude.
-"""
-
+import os
+import glob
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 
-def load_data(filepath):
-    """Load CSV into a pandas DataFrame."""
-    return pd.read_csv(filepath)
+# --- CONFIG ---
+DATA_DIR      = 'test-data'
+PLOT_DIR      = os.path.join(DATA_DIR, 'Plots')
+os.makedirs(PLOT_DIR, exist_ok=True)
 
-def plot_columns(df, x_col, y_cols, labels=None, title=None,
-                 xlabel=None, ylabel=None, save_path=None):
-    """
-    Generic function to plot one or more columns vs an x-axis column.
-    """
-    plt.figure()
-    x = df[x_col]
-    for i, y in enumerate(y_cols):
-        label = labels[i] if labels and i < len(labels) else y
-        plt.plot(x, df[y], label=label)
-    plt.xlabel(xlabel or x_col)
-    plt.ylabel(ylabel or ', '.join(y_cols))
-    if title:
-        plt.title(title)
-    plt.legend()
-    plt.grid(True)
-    if save_path:
-        plt.savefig(save_path)
-        plt.close()
-    else:
-        plt.show()
+# Paths for separate figures
+POSITION_PLOT_PATH      = os.path.join(PLOT_DIR, 'position_comparison.png')
+SPEED_PLOT_PATH         = os.path.join(PLOT_DIR, 'speed_comparison.png')
+SPEED_ERR_PLOT_PATH     = os.path.join(PLOT_DIR, 'speed_error_comparison.png')
+TIMEGAP_PLOT_PATH       = os.path.join(PLOT_DIR, 'time_gap_comparison.png')
+TIMEGAP_ERR_PLOT_PATH   = os.path.join(PLOT_DIR, 'time_gap_error_comparison.png')
 
-def plot_speed(df, vehicle='leader'):
-    """Plot commanded vs actual speed for the specified vehicle."""
-    cmd = f"{vehicle}_command_mps"
-    actual = f"{vehicle}_actual_mps"
-    plot_columns(
-        df,
-        x_col='timestamp_s',
-        y_cols=[cmd, actual],
-        labels=['Commanded Speed', 'Actual Speed'],
-        title=f"{vehicle.capitalize()} Speed vs Time",
-        ylabel='Speed (m/s)',
-        save_path=f"C:\\Users\\scout\\Backstepping\\ttu_dp_elisa3_python\\test-data\\Plots\\{vehicle}_speed.png"
-    )
+# Path for combined multi‑panel figure
+COMBINED_PLOT_PATH      = os.path.join(PLOT_DIR, 'combined_comparison.png')
 
-def plot_timegap_error(df):
-    """Plot time-gap error vs time with y-axis cropped between 0 and 50."""
-    plt.figure()
-    x = df['timestamp_s']
-    plt.plot(x, df['leader_follower_timegap_error_s'], label='Time Gap Error')
-    plt.xlabel('timestamp_s')
-    plt.ylabel('Error (s)')
-    plt.title('Time Gap Error vs Time')
-    plt.legend()
-    plt.grid(True)
-    plt.ylim(0, 50)  
-    save_path = r"C:\Users\scout\Backstepping\ttu_dp_elisa3_python\test-data\Plots\timegap_error.png"
-    plt.savefig(save_path)
-    plt.close()
+# --- LOAD THE LATEST CSV ---
+csv_files = glob.glob(os.path.join(DATA_DIR, 'epuck-exp-*.csv'))
+if not csv_files:
+    raise FileNotFoundError(f'No experiment CSV found in {DATA_DIR}')
+csv_file = max(csv_files, key=os.path.getmtime)
 
-def plot_distance(df):
-    """Plot leader-follower distance vs time."""
-    plot_columns(
-        df,
-        x_col='timestamp_s',
-        y_cols=['leader_follower_distance_m'],
-        labels=['Leader-Follower Distance'],
-        title='Distance vs Time',
-        ylabel='Distance (m)',
-        save_path=r"C:\Users\scout\Backstepping\ttu_dp_elisa3_python\test-data\Plots\robot_distance.png"
-    )
+df = pd.read_csv(csv_file)
 
-def plot_comparison(df, x_col, col1, col2, labels, title,
-                    ylabel, save_path=None):
-    """Generic leader vs follower comparison plot."""
-    plt.figure()
-    x = df[x_col]
-    plt.plot(x, df[col1], label=labels[0])
-    plt.plot(x, df[col2], label=labels[1])
-    plt.xlabel(x_col)
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.legend()
-    plt.grid(True)
-    if save_path:
-        plt.savefig(save_path)
-        plt.close()
-    else:
-        plt.show()
+# --- EXTRACT SERIES ---
+t           = df['timestamp_s']
+h_desired   = df['desired_timegap_s'].iloc[0]
 
-def plot_speed_errors(df):
-    """Plot speed error (command - actual) for leader and follower."""
-    df['leader_speed_error'] = df['leader_command_mps'] - df['leader_actual_mps']
-    df['follower_speed_error'] = df['follower_command_mps'] - df['follower_actual_mps']
-    plot_columns(
-        df,
-        x_col='timestamp_s',
-        y_cols=['leader_speed_error', 'follower_speed_error'],
-        labels=['Leader Speed Error', 'Follower Speed Error'],
-        title='Speed Error Comparison: Leader vs Follower',
-        ylabel='Speed Error (m/s)',
-        save_path=r"C:\Users\scout\Backstepping\ttu_dp_elisa3_python\test-data\Plots\speed_errors.png"
-    )
+# Positions
+pos_lead    = df['leader_position_m']
+pos_1       = df['follower_position_m']
+pos_2       = df['second_follower_position_m']
 
-def plot_speed_comparison(df):
-    """Compare actual speeds of leader and follower."""
-    plot_comparison(
-        df,
-        x_col='timestamp_s',
-        col1='leader_actual_mps',
-        col2='follower_actual_mps',
-        labels=['Leader Actual Speed', 'Follower Actual Speed'],
-        title='Actual Speed Comparison: Leader vs Follower',
-        ylabel='Speed (m/s)',
-        save_path=r"C:\Users\scout\Backstepping\ttu_dp_elisa3_python\test-data\Plots\speed_comparison.png"
-    )
+# Speeds & errors
+cmd_lead    = df['leader_command_mps']
+act_lead    = df['leader_actual_mps']
+cmd_1       = df['follower_command_mps']
+act_1       = df['follower_actual_mps']
+cmd_2       = df['second_follower_command_mps']
+act_2       = df['second_follower_actual_mps']
 
-def plot_position_comparison(df):
-    """Compare positions of leader and follower."""
-    plot_comparison(
-        df,
-        x_col='timestamp_s',
-        col1='leader_position_m',
-        col2='follower_position_m',
-        labels=['Leader Position', 'Follower Position'],
-        title='Position Comparison: Leader vs Follower',
-        ylabel='Position (m)',
-        save_path=r"C:\Users\scout\Backstepping\ttu_dp_elisa3_python\test-data\Plots\position_comparison.png"
-    )
+err_lead    = cmd_lead - act_lead
+err_1       = cmd_1    - act_1
+err_2       = cmd_2    - act_2
 
-def plot_acceleration_comparison(df):
-    """Compare acceleration magnitudes of leader and follower."""
-    df['leader_acc_mag'] = np.sqrt(
-        df['leader_accelerationx_mps2']**2 +
-        df['leader_accelerationy_mps2']**2 +
-        df['leader_accelerationz_mps2']**2
-    )
-    df['follower_acc_mag'] = np.sqrt(
-        df['follower_accelerationx_mps2']**2 +
-        df['follower_accelerationy_mps2']**2 +
-        df['follower_accelerationz_mps2']**2
-    )
-    plot_comparison(
-        df,
-        x_col='timestamp_s',
-        col1='leader_acc_mag',
-        col2='follower_acc_mag',
-        labels=['Leader Acceleration', 'Follower Acceleration'],
-        title='Acceleration Comparison: Leader vs Follower',
-        ylabel='Acceleration (m/s^2)',
-        save_path=r"C:\Users\scout\Backstepping\ttu_dp_elisa3_python\test-data\Plots\acceleration_comparison.png"
-    )
-
-if __name__ == "__main__":
-    # === Configuration ===
-    csv_file = r"C:\Users\scout\Backstepping\ttu_dp_elisa3_python\test-data\epuck-exp-20250418_214348.csv"
-    df = load_data(csv_file)
-
-    # === Plot Calls ===
-    plot_speed(df, 'leader')
-    plot_speed(df, 'follower')
-    plot_timegap_error(df)
-    plot_distance(df)
-    plot_speed_errors(df)
-    plot_speed_comparison(df)
-    plot_position_comparison(df)
-    plot_acceleration_comparison(df)
+# Time gaps & errors
+tg_1        = df['leader_follower_timegap_s']
+tg_1_err    = df['leader_follower_timegap_error_s']
+tg_2        = df['follower_second_follower_timegap_s']
+tg_2_err    = df['follower_second_follower_timegap_error_s']
 
 
+# --- 1) Separate Figures ---
+
+# Positions
+plt.figure()
+plt.plot(t, pos_lead, label='Leader')
+plt.plot(t, pos_1,    label='Follower')
+plt.plot(t, pos_2,    label='2nd Follower')
+plt.title('Position vs Time')
+plt.xlabel('Time (s)')
+plt.ylabel('Position (m)')
+plt.legend()
+plt.tight_layout()
+plt.savefig(POSITION_PLOT_PATH)
+plt.close()
+
+# Speeds
+plt.figure()
+plt.plot(t, act_lead, label='Leader Actual')
+plt.plot(t, act_1,    label='Follower Actual')
+plt.plot(t, act_2,    label='2nd Follower Actual')
+plt.title('Actual Speeds vs Time')
+plt.xlabel('Time (s)')
+plt.ylabel('Speed (m/s)')
+plt.legend()
+plt.tight_layout()
+plt.savefig(SPEED_PLOT_PATH)
+plt.close()
+
+# Speed Errors
+plt.figure()
+plt.plot(t, err_lead, label='Leader Error')
+plt.plot(t, err_1,    label='Follower Error')
+plt.plot(t, err_2,    label='2nd Follower Error')
+plt.title('Speed Command Error vs Time')
+plt.xlabel('Time (s)')
+plt.ylabel('Error (m/s)')
+plt.legend()
+plt.tight_layout()
+plt.savefig(SPEED_ERR_PLOT_PATH)
+plt.close()
+
+# Time Gaps (with y‑limit 0–20)
+plt.figure()
+plt.plot(t, tg_1, label='Leader–Follower')
+plt.plot(t, tg_2, label='Follower–2nd')
+plt.hlines(h_desired, t.iloc[0], t.iloc[-1], linestyles='--', label='Desired Gap')
+plt.title('Time Gap vs Time')
+plt.xlabel('Time (s)')
+plt.ylabel('Time Gap (s)')
+plt.ylim(0, 20)
+plt.legend()
+plt.tight_layout()
+plt.savefig(TIMEGAP_PLOT_PATH)
+plt.close()
+
+# Time Gap Errors (no change in limits)
+plt.figure()
+plt.plot(t, tg_1_err, label='Leader–Follower Error')
+plt.plot(t, tg_2_err, label='Follower–2nd Error')
+plt.title('Time Gap Error vs Time')
+plt.xlabel('Time (s)')
+plt.ylabel('Error (s)')
+plt.ylim(0, 20)
+plt.legend()
+plt.tight_layout()
+plt.savefig(TIMEGAP_ERR_PLOT_PATH)
+plt.close()
+
+
+# --- 2) Combined Figure (3×2 panels) ---
+
+fig, axs = plt.subplots(3, 2, figsize=(12, 10))
+
+# Row 1: Positions
+ax = axs[0, 0]
+ax.plot(t, pos_lead, label='Leader')
+ax.plot(t, pos_1,    label='Follower')
+ax.plot(t, pos_2,    label='2nd Follower')
+ax.set_title('Positions')
+ax.set_ylabel('m')
+ax.legend()
+axs[0,1].axis('off')  # empty panel
+
+# Row 2: Speeds & Errors
+ax = axs[1, 0]
+ax.plot(t, act_lead, label='Leader')
+ax.plot(t, act_1,    label='Follower')
+ax.plot(t, act_2,    label='2nd Follow.')
+ax.set_title('Actual Speeds')
+ax.set_ylabel('m/s')
+ax.legend()
+
+ax = axs[1, 1]
+ax.plot(t, err_lead, label='Leader Err')
+ax.plot(t, err_1,    label='Follower Err')
+ax.plot(t, err_2,    label='2nd Err')
+ax.set_title('Speed Errors')
+ax.set_ylabel('m/s')
+ax.legend()
+
+# Row 3: Time Gaps & Errors
+ax = axs[2, 0]
+ax.plot(t, tg_1, label='Leader–Follower')
+ax.plot(t, tg_2, label='Follower–2nd')
+ax.hlines(h_desired, t.iloc[0], t.iloc[-1], linestyles='--', label='Desired')
+ax.set_title('Time Gaps')
+ax.set_ylabel('s')
+ax.set_ylim(0, 20)
+ax.legend()
+
+ax = axs[2, 1]
+ax.plot(t, tg_1_err, label='Leader–Follower Err')
+ax.plot(t, tg_2_err, label='Follower–2nd Err')
+ax.set_title('Time Gap Errors')
+ax.set_ylabel('s')
+ax.legend()
+
+# common x-axis
+for ax in axs.flat:
+    ax.set_xlabel('Time (s)')
+
+plt.tight_layout()
+plt.savefig(COMBINED_PLOT_PATH)
+plt.close(fig)
+
+print("Separate plots saved to:")
+print("  ", POSITION_PLOT_PATH)
+print("  ", SPEED_PLOT_PATH)
+print("  ", SPEED_ERR_PLOT_PATH)
+print("  ", TIMEGAP_PLOT_PATH)
+print("  ", TIMEGAP_ERR_PLOT_PATH)
+print("Combined figure saved to:", COMBINED_PLOT_PATH)

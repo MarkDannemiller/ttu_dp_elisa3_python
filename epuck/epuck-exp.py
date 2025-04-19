@@ -237,9 +237,9 @@ def main():
     
     control_params = {
         # Vehicle 1 (first follower) backstepping parameters
-        "k11": 10.0,  # positive gain for stage 1
-        "k12": 10.0,  # gain for sJtage 2 (q1 computation)
-        "k13": 10.0,  # gain for stage 3 (final control)
+        "k11": 1.0,  # positive gain for stage 1
+        "k12": 1.0,  # gain for sJtage 2 (q1 computation)
+        "k13": 1.0,  # gain for stage 3 (final control)
         "epsilon11": 1.0,
         "epsilon12": 1.0,
         "epsilon13": 1.0,
@@ -528,10 +528,7 @@ def main():
                 follower_actual_linear_speed = follower_state["speed"]  # Already using right wheel only
                 leader_follower_distance = leader_state["position"] - follower_state["position"]
                 
-                if follower_actual_linear_speed != 0.0:
-                    leader_follower_time_gap = leader_follower_distance / follower_actual_linear_speed
-                else:
-                    leader_follower_time_gap = 9999999.0
+                leader_follower_time_gap = leader_follower_distance / follower_actual_linear_speed if follower_actual_linear_speed > 0.001 else np.nan
                 
                 # Update data point with follower control data
                 data_point.update({
@@ -602,10 +599,8 @@ def main():
                 second_follower_actual_linear_speed = second_follower_state["speed"]  # Already using right wheel only
                 follower_second_follower_distance = follower_state["position"] - second_follower_state["position"]
                 
-                if second_follower_actual_linear_speed > 0.001:
-                    follower_second_follower_time_gap = follower_second_follower_distance / second_follower_actual_linear_speed
-                else:
-                    follower_second_follower_time_gap = 9999999.0
+                follower_second_follower_time_gap = follower_second_follower_distance / second_follower_actual_linear_speed if second_follower_actual_linear_speed > 0.001 else np.nan
+
                 
                 # Update data point with second follower control data
                 data_point.update({

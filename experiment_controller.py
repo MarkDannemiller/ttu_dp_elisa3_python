@@ -170,10 +170,14 @@ class ExperimentController:
             self.control_params["epsilon12"],
             self.control_params["epsilon13"],
         )
-        # Integrate the acceleration command to update desired speed:
-        self.desired_speed += a_command * dt_actual
+        # # Integrate the acceleration command to update desired speed:
+        # self.desired_speed += a_command * dt_actual
 
-        return self.desired_speed
+        # return self.desired_speed
+    
+        v_meas = sensor_data["speed"]
+        v_set = v_meas + a_command * dt_actual
+        return v_set
         
         # # Now run a low-level PID speed controller:
         # error = self.desired_speed - sensor_data["speed"]
@@ -259,10 +263,14 @@ class ExperimentController:
             self.control_params["epsilon22"], self.control_params["epsilon23"]
         )
         
-        # Integrate the acceleration command to update desired speed
-        self.desired_speed += a_command * dt_actual
+        # # Integrate the acceleration command to update desired speed
+        # self.desired_speed += a_command * dt_actual
 
-        return self.desired_speed
+        # return self.desired_speed
+    
+        v_meas = sensor_data["speed"]
+        v_set = v_meas + a_command * dt_actual
+        return v_set
         
         # # Low-level PID speed controller
         # error = self.desired_speed - sensor_data["speed"]
