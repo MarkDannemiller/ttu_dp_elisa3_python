@@ -112,21 +112,23 @@ class ExperimentController:
         desired_speed, desired_accel = self.leader_profile(t)
         current_speed = sensor_data.get("speed", 0.0)
 
-        # Compute error for PID
-        error = desired_speed - current_speed
-        self.integral_error += error * dt_actual
-        derivative_error = (
-            (error - self.previous_error) / dt_actual if dt_actual > 0 else 0.0
-        )
-        self.previous_error = error
+        return 0.1# desired_speed
 
-        kp = self.control_params.get("leader_kp", 1.0)
-        ki = self.control_params.get("leader_ki", 0.1)
-        kd = self.control_params.get("leader_kd", 0.05)
+        # # Compute error for PID
+        # error = desired_speed - current_speed
+        # self.integral_error += error * dt_actual
+        # derivative_error = (
+        #     (error - self.previous_error) / dt_actual if dt_actual > 0 else 0.0
+        # )
+        # self.previous_error = error
 
-        # Simple PID control law (feedforward with desired acceleration can be added)
-        command = kp * error + ki * self.integral_error + kd * derivative_error
-        return command
+        # kp = self.control_params.get("leader_kp", 1.0)
+        # ki = self.control_params.get("leader_ki", 0.1)
+        # kd = self.control_params.get("leader_kd", 0.05)
+
+        # # Simple PID control law (feedforward with desired acceleration can be added)
+        # command = kp * error + ki * self.integral_error + kd * derivative_error
+        # return command
 
     def compute_follower_command(self, sensor_data, preceding_state, dt_actual):
         """
@@ -172,22 +174,24 @@ class ExperimentController:
         )
         # Integrate the acceleration command to update desired speed:
         self.desired_speed += a_command * dt_actual
+
+        return self.desired_speed
         
-        # Now run a low-level PID speed controller:
-        error = self.desired_speed - sensor_data["speed"]
-        self.pid_integral += error * dt_actual
-        derivative = (error - self.pid_prev_error) / dt_actual if dt_actual > 0 else 0.0
-        self.pid_prev_error = error
+        # # Now run a low-level PID speed controller:
+        # error = self.desired_speed - sensor_data["speed"]
+        # self.pid_integral += error * dt_actual
+        # derivative = (error - self.pid_prev_error) / dt_actual if dt_actual > 0 else 0.0
+        # self.pid_prev_error = error
 
-        # Use follower-specific PID gains:
-        kp = self.control_params.get("follower_kp", 1.0)  # Proportional gain (unitless)
-        ki = self.control_params.get("follower_ki", 0.1)  # Integral gain (unitless)
-        kd = self.control_params.get("follower_kd", 0.05)  # Derivative gain (unitless)
-        motor_command = (
-            kp * error + ki * self.pid_integral + kd * derivative
-        )  # Output in m/s
+        # # Use follower-specific PID gains:
+        # kp = self.control_params.get("follower_kp", 1.0)  # Proportional gain (unitless)
+        # ki = self.control_params.get("follower_ki", 0.1)  # Integral gain (unitless)
+        # kd = self.control_params.get("follower_kd", 0.05)  # Derivative gain (unitless)
+        # motor_command = (
+        #     kp * error + ki * self.pid_integral + kd * derivative
+        # )  # Output in m/s
 
-        return motor_command
+        # return motor_command
 
     def compute_second_follower_command(self, sensor_data, preceding_state, leader_state, dt_actual):
         """
@@ -259,20 +263,22 @@ class ExperimentController:
         
         # Integrate the acceleration command to update desired speed
         self.desired_speed += a_command * dt_actual
+
+        return self.desired_speed
         
-        # Low-level PID speed controller
-        error = self.desired_speed - sensor_data["speed"]
-        self.pid_integral += error * dt_actual
-        derivative = (error - self.pid_prev_error) / dt_actual if dt_actual > 0 else 0.0
-        self.pid_prev_error = error
+        # # Low-level PID speed controller
+        # error = self.desired_speed - sensor_data["speed"]
+        # self.pid_integral += error * dt_actual
+        # derivative = (error - self.pid_prev_error) / dt_actual if dt_actual > 0 else 0.0
+        # self.pid_prev_error = error
         
-        # Use second follower-specific PID gains
-        kp = self.control_params.get("second_follower_kp", 1.0)
-        ki = self.control_params.get("second_follower_ki", 0.1)
-        kd = self.control_params.get("second_follower_kd", 0.05)
-        motor_command = kp * error + ki * self.pid_integral + kd * derivative
+        # # Use second follower-specific PID gains
+        # kp = self.control_params.get("second_follower_kp", 1.0)
+        # ki = self.control_params.get("second_follower_ki", 0.1)
+        # kd = self.control_params.get("second_follower_kd", 0.05)
+        # motor_command = kp * error + ki * self.pid_integral + kd * derivative
         
-        return motor_command
+        # return motor_command
 
     def compute_command(self, sensor_data, t, preceding_state=None, leader_state=None, dt_actual=None):
         """
