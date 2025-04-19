@@ -48,11 +48,9 @@ class ExperimentController:
         self.integral_error = 0.0
         self.previous_error = 0.0
 
-        if self.role == "follower":
-            # Initialize the internal desired speed to the starting speed.
-            self.desired_speed = params.get("initial_speed", 0.15)
-            # Set up a simple PID state for speed control.
-            self.pid_integral = 0.0
+        if self.role in ("follower", "second_follower"):
+            self.desired_speed = 0.0
+            self.pid_integral  = 0.0
             self.pid_prev_error = 0.0
 
     def leader_profile(self, t):

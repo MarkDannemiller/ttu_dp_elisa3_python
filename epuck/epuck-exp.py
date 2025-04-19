@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 import socket
 import math
+import matplotlib.pyplot as plt
 
 # Add the parent directory to the Python path to allow importing experiment_controller
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -236,9 +237,9 @@ def main():
     
     control_params = {
         # Vehicle 1 (first follower) backstepping parameters
-        "k11": 1.0,  # positive gain for stage 1
-        "k12": 1.0,  # gain for sJtage 2 (q1 computation)
-        "k13": 1.0,  # gain for stage 3 (final control)
+        "k11": 10.0,  # positive gain for stage 1
+        "k12": 10.0,  # gain for sJtage 2 (q1 computation)
+        "k13": 10.0,  # gain for stage 3 (final control)
         "epsilon11": 1.0,
         "epsilon12": 1.0,
         "epsilon13": 1.0,
@@ -251,17 +252,6 @@ def main():
         "k23": 0.005,
         "epsilon22": 200.0,
         "epsilon23": 200.0,
-        
-        # PID parameters for all robots
-        "leader_kp": 0.5,
-        "leader_ki": 0.05,
-        "leader_kd": 0.05,
-        "follower_kp": 0.5,
-        "follower_ki": 0.05,
-        "follower_kd": 0.05,
-        "second_follower_kp": 0.5,
-        "second_follower_ki": 0.05,
-        "second_follower_kd": 0.05,
     }
     dt = 0.1  # control loop period (s); adjust as needed
 
@@ -283,7 +273,7 @@ def main():
     # second_follower_ip = "192.168.0.29"  # EPUCK-5517 - Add second follower IP
 
     leader_ip = "192.168.0.29" # EPUCK-5517
-    # second_follower_ip = "192.168.0.191" # EPUCK-5515
+    # follower_ip = "192.168.0.191" # EPUCK-5515
 
     # Initialize robots
     leader = wrapper.get_robot(leader_ip)
@@ -538,7 +528,7 @@ def main():
                 follower_actual_linear_speed = follower_state["speed"]  # Already using right wheel only
                 leader_follower_distance = leader_state["position"] - follower_state["position"]
                 
-                if follower_actual_linear_speed > 0.001:
+                if follower_actual_linear_speed != 0.0:
                     leader_follower_time_gap = leader_follower_distance / follower_actual_linear_speed
                 else:
                     leader_follower_time_gap = 9999999.0
@@ -752,6 +742,65 @@ def main():
                 print(f"Data saved to backup file: {backup_file}")
             except Exception as e2:
                 print(f"Failed to save backup data: {str(e2)}")
+
+    # Plot time gap values and positions after the experiment is complete
+    plt.figure(figsize=(12, 8))
+    
+    # Time gap plot
+    plt.subplot(2, 1, 1)
+    plt.plot(df['timestamp_s'], df['leader_follower_timegap_s'], 'b-', label='Leader-Follower Time Gap')
+    plt.plot(df['timestamp_s'], df['follower_second_follower_timegap_s'], 'r-', label='Follower-Second Follower Time Gap')
+    plt.axhline(y=params['h'], color='g', linestyle='--', label=f'Desired Time Gap ({params["h"]} s)')
+    
+    # Add labels and title
+    plt.title('Time Gaps Between Robots')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Time Gap (s)')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    # Set reasonable y-axis limits to exclude extreme values
+    percentile_99 = max(
+        np.percentile(df['leader_follower_timegap_s'].dropna(), 99),
+        np.percentile(df['follower_second_follower_timegap_s'].dropna(), 99)
+    )
+    y_max = min(percentile_99 * 1.1, params['h'] * 2)
+    plt.ylim(0, y_max)
+    
+    # Position and distance plot
+    plt.subplot(2, 1, 2)
+    plt.plot(df['timestamp_s'], df['leader_position_m'], 'g-', label='Leader Position')
+    plt.plot(df['timestamp_s'], df['follower_position_m'], 'b-', label='Follower Position')
+    plt.plot(df['timestamp_s'], df['second_follower_position_m'], 'r-', label='Second Follower Position')
+    plt.plot(df['timestamp_s'], df['leader_follower_distance_m'], 'b--', alpha=0.7, label='Leader-Follower Distance')
+    plt.plot(df['timestamp_s'], df['follower_second_follower_distance_m'], 'r--', alpha=0.7, label='Follower-Second Follower Distance')
+    
+    plt.title('Robot Positions and Distances')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Position (m) / Distance (m)')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    # Display the plot
+    plt.tight_layout()
+    plt.savefig(os.path.join(data_dir, f"timegap_plot-{timestamp}.png"))
+    plt.show()
+    
+    # Also plot speeds for analysis
+    plt.figure(figsize=(12, 6))
+    plt.plot(df['timestamp_s'], df['leader_actual_mps'], 'g-', label='Leader Speed')
+    plt.plot(df['timestamp_s'], df['follower_actual_mps'], 'b-', label='Follower Speed')
+    plt.plot(df['timestamp_s'], df['second_follower_actual_mps'], 'r-', label='Second Follower Speed')
+    
+    plt.title('Robot Speeds')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Speed (m/s)')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(data_dir, f"speed_plot-{timestamp}.png"))
+    plt.show()
 
 
 if __name__ == "__main__":
